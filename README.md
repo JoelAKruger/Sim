@@ -234,6 +234,16 @@ site, set `terrain.heightmap` to a binary PGM:
 
 A DEM converts with, for example, `gdal_translate -of PNM -ot UInt16 -scale site.tif site.pgm`.
 
+**Boulders:** `terrain.boulders` rocks (400 by default; 0 for none) are scattered across the
+terrain and fixed in the ground.
+- **Size:** `terrain.boulder_size_m` (0.1 to 1.2 m); most are small.
+- **Shape:** irregular convex rocks, partly buried, only where the ground is level enough
+  for them.
+- **Spawn area:** the 6 m around `robot.spawn` is kept clear.
+- **What they are:** static Box3D hulls, so the rover collides with them and the LiDAR and
+  camera see them.
+- **Layout:** it comes from `terrain.seed`, the same every run.
+
 ## Layout and modularity
 
 - `core/`: the simulation: world, terrain, settings, and the lock-free shared state between
@@ -282,6 +292,21 @@ from the spawn point. Their layout comes from `terrain.seed`, so it is the same 
 
 The mouse orbits (right button), pans (middle button, or WASD) and zooms (wheel) only over
 the 3D view, never over the panel.
+
+**Lighting:** a low, hard sun (25° up) with long shadows and only a faint fill, since the
+Moon has no atmosphere. The ground and rocks get fine procedural grain, with darker crater
+walls. The sky has stars, and the terrain fades to black at its edges. The sensor camera
+sees the same lighting and shadows, but no stars, as a real camera exposed for sunlit
+ground wouldn't.
+
+**Graphics quality:** `viewer.quality`, or the LOW / MED / HIGH switch in the panel, trades
+looks for speed:
+
+| | shadows | surface grain |
+|---|---|---|
+| LOW | none | none |
+| MED | 2048² map, 3×3 filter, rover shadow from its collision shapes | yes |
+| HIGH | 4096² map, 5×5 filter, rover shadow from its full meshes | yes |
 
 Text is JetBrains Mono. The font is copied into the binary at build time
 (`REGOLITH_FONT_REGULAR` and `REGOLITH_FONT_BOLD`, which Nix sets), so nothing is loaded

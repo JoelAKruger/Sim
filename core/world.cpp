@@ -71,7 +71,8 @@ bool create_world(World *world, Linear_Allocator *allocator, const Sim_Config *c
     } else if (!generate_terrain(&world->terrain, allocator, config)) {
         return false;
     }
-    return create_terrain_body(world);
+    return create_terrain_body(world) &&
+           create_boulders(&world->boulders, world->id, &world->terrain, config, allocator);
 }
 
 void destroy_world(World *world)

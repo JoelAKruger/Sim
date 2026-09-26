@@ -3,6 +3,7 @@
 #include <raylib.h>
 
 #include "core/world.h"
+#include "render/shading.h"
 #include "render/ui.h"
 
 // Orbits a target point on the ground. World z is up.
@@ -54,12 +55,13 @@ struct Viewer_Visual {
 };
 
 struct Viewer {
-    Shader lit;
-    i32 sun_direction_location;
-    Material material;
+    Shading shading; // the lit shader, shadows and stars
+    Material material; // draws with shading.lit
     Mesh *terrain_tiles;
     u32 terrain_tile_count;
     Mesh box;
+    Mesh boulder_mesh; // every boulder, in world space
+    bool has_boulder_mesh;
     Orbit_Camera camera;
     const char *screenshot_path; // when set, the next frame is saved here as a PNG
 

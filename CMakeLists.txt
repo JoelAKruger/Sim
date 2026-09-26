@@ -45,6 +45,7 @@ add_library(regolith_core STATIC
   core/urdf.cpp
   core/terrain.cpp
   core/world.cpp
+  core/boulders.cpp
   core/worker_pool.cpp
   core/sensors/imu.cpp
   core/sensors/lidar.cpp
@@ -81,7 +82,7 @@ foreach(weight regular bold)
 endforeach()
 file(CONFIGURE OUTPUT ${ui_fonts_source} CONTENT "${ui_fonts_text}" @ONLY)
 
-add_library(regolith_render STATIC render/viewer.cpp render/sensor_camera.cpp render/ui.cpp ${ui_fonts_source})
+add_library(regolith_render STATIC render/viewer.cpp render/sensor_camera.cpp render/shading.cpp render/ui.cpp ${ui_fonts_source})
 target_link_libraries(regolith_render PUBLIC regolith_core raylib)
 target_compile_options(regolith_render PRIVATE ${REGOLITH_STRICT_FLAGS})
 

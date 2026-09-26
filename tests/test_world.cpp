@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@ static Sim_Config make_small_config(void)
     config.terrain_size[0] = 40.0f;
     config.terrain_size[1] = 30.0f;
     config.crater_count = 20;
+    config.boulder_count = 0; // these tests are about the bare ground
     return config;
 }
 
@@ -154,6 +156,71 @@ static void test_heightmap(Linear_Allocator *allocator)
     unlink(path);
 }
 
+// Boulders: clear of the spawn, the same for the same seed, solid to rays, and drawn with
+// outward-facing triangles.
+static u64 hash_boulders(Linear_Allocator *allocator, u32 seed, u32 count, u32 *placed)
+{
+    Sim_Config config = make_small_config();
+    config.terrain_size[0] = config.terrain_size[1] = 60.0f;
+    config.terrain_seed = seed;
+    config.boulder_count = count;
+    static World world;
+    u64 hash = HASH_SEED;
+    CHECK(create_world(&world, allocator, &config));
+    const Boulder_Field *field = &world.boulders;
+    *placed = field->count;
+    for (u32 i = 0; i < field->count; i++) {
+        const Boulder *boulder = &field->boulders[i];
+        hash = hash_bytes(hash, boulder, sizeof(Boulder));
+        f32 dx = boulder->center.x - config.robot_spawn.x;
+        f32 dy = boulder->center.y - config.robot_spawn.y;
+        CHECK(sqrtf(dx * dx + dy * dy) >= BOULDER_SPAWN_CLEARANCE);
+        CHECK(boulder->radius <= 0.5f * config.boulder_size[1] * 1.2f * 1.25f + 1e-4f);
+    }
+    // Every rock's triangles face outwards (they're checked against their own rock).
+    bool outward = true;
+    for (u32 i = 0; i < field->count; i++) {
+        const Boulder *boulder = &field->boulders[i];
+        for (u32 v = boulder->first_vertex; v < boulder->first_vertex + boulder->vertex_count;
+             v += 3) {
+            v3 middle = (1.0f / 3.0f) *
+                        (field->vertices[v] + field->vertices[v + 1] + field->vertices[v + 2]);
+            outward = outward && b3Dot(field->normals[v], middle - boulder->center) > 0.0f;
+        }
+    }
+    CHECK(outward);
+    if (field->count > 0) {
+        // Straight down onto the biggest rock's centre: it is hit well above the ground.
+        const Boulder *biggest = &field->boulders[0];
+        for (u32 i = 1; i < field->count; i++) {
+            if (field->boulders[i].radius > biggest->radius) {
+                biggest = &field->boulders[i];
+            }
+        }
+        v3 origin = {biggest->center.x, biggest->center.y, biggest->center.z + 5.0f};
+        f32 distance = cast_ray(&world, origin, v3{0.0f, 0.0f, -1.0f}, 20.0f);
+        f32 ground = get_terrain_height(&world.terrain, origin.x, origin.y);
+        CHECK(distance > 0.0f && origin.z - distance > ground + 0.05f);
+    }
+    destroy_world(&world);
+    reset_allocator(allocator);
+    return hash;
+}
+
+static void test_boulders(Linear_Allocator *allocator)
+{
+    u32 placed_a, placed_b, placed_c, none;
+    u64 a = hash_boulders(allocator, 7, 80, &placed_a);
+    u64 b = hash_boulders(allocator, 7, 80, &placed_b);
+    u64 c = hash_boulders(allocator, 8, 80, &placed_c);
+    hash_boulders(allocator, 7, 0, &none);
+    printf("  boulders: %u of 80 placed\n", placed_a);
+    CHECK(placed_a >= 70 && placed_a <= 80);
+    CHECK(a == b && placed_a == placed_b);
+    CHECK(a != c);
+    CHECK(none == 0);
+}
+
 int main(void)
 {
     Linear_Allocator allocator;
@@ -165,6 +232,8 @@ int main(void)
     test_determinism(&allocator);
     reset_allocator(&allocator);
     test_heightmap(&allocator);
+    reset_allocator(&allocator);
+    test_boulders(&allocator);
     destroy_allocator(&allocator);
     return report_checks("world");
 }

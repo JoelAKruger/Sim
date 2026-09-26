@@ -3,6 +3,7 @@
 #include <box3d/box3d.h>
 
 #include "core/actuator.h"
+#include "core/boulders.h"
 #include "core/allocator.h"
 #include "core/config.h"
 #include "core/robot.h"
@@ -37,6 +38,7 @@ struct World {
     Terrain terrain;
     b3HeightFieldData *height_field;
     b3BodyId terrain_body;
+    Boulder_Field boulders; // fixed rocks on the terrain
     Prop props[WORLD_MAX_PROPS];
     u32 prop_count;
     u64 step_count;

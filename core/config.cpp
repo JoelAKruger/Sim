@@ -48,6 +48,12 @@ const Config_Field config_fields[] = {
     {.key = "terrain.friction", .type = CONFIG_F32, .count = 1,
      .offset = offsetof(Sim_Config, terrain_friction), .minimum = 0.0, .maximum = 10.0,
      .defaults = {0.8}, .help = "Coulomb friction coefficient of the ground"},
+    {.key = "terrain.boulders", .type = CONFIG_U32, .count = 1,
+     .offset = offsetof(Sim_Config, boulder_count), .minimum = 0.0, .maximum = 5000.0,
+     .defaults = {400.0}, .help = "fixed rocks scattered over the terrain (from terrain.seed); 0 none"},
+    {.key = "terrain.boulder_size_m", .type = CONFIG_F32, .count = 2,
+     .offset = offsetof(Sim_Config, boulder_size), .minimum = 0.02, .maximum = 20.0,
+     .defaults = {0.1, 1.2}, .help = "smallest and largest; most are small"},
 
     {.key = "robot.urdf", .type = CONFIG_STRING, .count = 1,
      .offset = offsetof(Sim_Config, robot_urdf), .text_default = "",
@@ -185,6 +191,10 @@ const Config_Field config_fields[] = {
     {.key = "sensors.seed", .type = CONFIG_U32, .count = 1,
      .offset = offsetof(Sim_Config, sensor_seed), .minimum = 0.0, .maximum = 4294967295.0,
      .defaults = {1.0}, .help = "noise seed; the same seed gives the same readings"},
+
+    {.key = "viewer.quality", .type = CONFIG_U32, .count = 1,
+     .offset = offsetof(Sim_Config, graphics_quality), .minimum = 0.0, .maximum = 2.0,
+     .defaults = {1.0}, .help = "graphics: 0 low (no shadows), 1 medium, 2 high; also in the panel"},
 };
 // clang-format on
 const u32 config_field_count = ARRAY_COUNT(config_fields);
@@ -338,6 +348,7 @@ bool validate_config(const Sim_Config *config, char *error, u32 error_size)
         const f32 *values;
     };
     Ordered_Pair pairs[] = {
+        {"terrain.boulder_size_m", config->boulder_size},
         {"lidar.vertical_fov_deg", config->lidar.vertical_fov},
         {"lidar.range_m", config->lidar.range},
         {"camera.depth.range_m", config->camera.depth_range},

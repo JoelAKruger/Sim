@@ -149,7 +149,8 @@ static void read_target(const RenderTexture2D *target, u8 *rgba, u32 width, u32 
     MemFree(pixels);
 }
 
-// Colour: the lit scene, as the viewer draws it.
+// Colour: the lit scene, as the viewer draws it, shadows included (from the viewer's latest
+// shadow map). No stars: a camera exposed for sunlit regolith can't see them.
 void render_color_frame(Sensor_Camera *camera, const Viewer *viewer, const World *world,
                         Camera_Frame_Header *frame)
 {
@@ -160,7 +161,9 @@ void render_color_frame(Sensor_Camera *camera, const Viewer *viewer, const World
     ClearBackground(BLACK);
     rlSetClipPlanes(VIEWER_NEAR, VIEWER_FAR);
     BeginMode3D(make_stream_camera(camera, stream, world));
+    begin_lit_drawing(&viewer->shading);
     draw_scene(viewer, world, 1.0f, &color_material, false);
+    end_lit_drawing();
     EndMode3D();
     EndTextureMode();
 

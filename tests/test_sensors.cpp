@@ -29,6 +29,7 @@ static Sim_Config make_sensor_config(void)
     config.terrain_size[0] = config.terrain_size[1] = 100.0f;
     config.terrain_relief = 0.0f;
     config.crater_count = 0;
+    config.boulder_count = 0; // bare ground, so every LiDAR return is on it
     config.imu.enabled = true;
     config.lidar.enabled = true;
     snprintf(config.imu.frame, sizeof(config.imu.frame), "base");

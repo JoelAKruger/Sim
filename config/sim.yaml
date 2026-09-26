@@ -18,6 +18,8 @@ regolith:
       relief_m: 3.0                # m, amplitude of the procedural hills
       seed: 1                      # procedural terrain seed
       craters: 60                  # number of craters, 1 to 15 m in radius
+      boulders: 400                # fixed rocks scattered over the terrain (from terrain.seed); 0 none
+      boulder_size_m: [0.1, 1.2]   # smallest and largest; most are small
       friction: 0.8                # Coulomb friction coefficient of the ground
     robot:
       urdf: ""                     # URDF file; empty to take /robot_description
@@ -70,3 +72,5 @@ regolith:
         topic: "/d415/depth/image_rect_raw" # 16UC1 Image in mm; its CameraInfo goes to the sibling camera_info
     sensors:
       seed: 1                      # noise seed; the same seed gives the same readings
+    viewer:
+      quality: 1                   # graphics: 0 low (no shadows), 1 medium, 2 high; also in the panel

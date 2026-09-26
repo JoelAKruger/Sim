@@ -20,42 +20,6 @@
 #define PANEL_PADDING 18.0f
 #define ROW_HEIGHT 30.0f
 
-static const char *lit_vertex_shader = R"glsl(
-#version 330
-in vec3 vertexPosition;
-in vec3 vertexNormal;
-in vec4 vertexColor;
-uniform mat4 mvp;
-uniform mat4 matModel;
-uniform mat4 matNormal;
-out vec3 frag_normal;
-out vec4 frag_color;
-void main()
-{
-    frag_normal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
-    frag_color = vertexColor;
-    gl_Position = mvp * vec4(vertexPosition, 1.0);
-}
-)glsl";
-
-// Harsh direct sun plus a faint fill, since there is no atmosphere to scatter light.
-static const char *lit_fragment_shader = R"glsl(
-#version 330
-in vec3 frag_normal;
-in vec4 frag_color;
-uniform vec4 colDiffuse;
-uniform vec3 sun_direction;
-out vec4 final_color;
-void main()
-{
-    vec3 normal = normalize(frag_normal);
-    float sun = max(dot(normal, -sun_direction), 0.0);
-    float fill = 0.10 + 0.06 * normal.z;
-    vec3 albedo = frag_color.rgb * colDiffuse.rgb;
-    final_color = vec4(albedo * (fill + 1.05 * sun), 1.0);
-}
-)glsl";
-
 static Vector3 convert_vector3(v3 v) { return Vector3{v.x, v.y, v.z}; }
 
 static Quaternion convert_quaternion(b3Quat q) { return Quaternion{q.v.x, q.v.y, q.v.z, q.s}; }
@@ -376,35 +340,75 @@ static void load_robot_meshes(Viewer *viewer, const World *world, Linear_Allocat
              viewer->mesh_count, triangles / 1000, (f64)(get_time_ns() - start) * 1e-6);
 }
 
+static void draw_robot_visual(const Viewer *viewer, const Robot *robot, const Viewer_Visual *visual,
+                              f32 alpha, Material *material)
+{
+    b3Transform pose = b3MulTransforms(get_link_pose(robot, visual->link, alpha), visual->origin);
+    material->maps[MATERIAL_MAP_DIFFUSE].color = visual->color;
+    DrawMesh(viewer->meshes[visual->mesh].mesh, *material,
+             MatrixMultiply(visual->correction, make_transform_matrix(pose)));
+}
+
+// The robot's visuals, then (when asked) its collision shapes as wireframes over them.
 static void draw_robot(const Viewer *viewer, const World *world, f32 alpha, Material *material,
                        bool show_collisions)
 {
     const Robot *robot = &world->robot;
-    for (u32 pass = 0; pass < 2; pass++) {
-        bool collision = pass == 1;
-        if (collision && !show_collisions) {
-            break;
-        }
-        if (collision) {
-            rlDrawRenderBatchActive();
-            rlEnableWireMode();
-        }
-        for (u32 i = 0; i < viewer->visual_count; i++) {
-            const Viewer_Visual *visual = &viewer->visuals[i];
-            if (visual->collision != collision) {
-                continue;
-            }
-            b3Transform pose =
-                b3MulTransforms(get_link_pose(robot, visual->link, alpha), visual->origin);
-            material->maps[MATERIAL_MAP_DIFFUSE].color = visual->color;
-            DrawMesh(viewer->meshes[visual->mesh].mesh, *material,
-                     MatrixMultiply(visual->correction, make_transform_matrix(pose)));
-        }
-        if (collision) {
-            rlDrawRenderBatchActive();
-            rlDisableWireMode();
+    for (u32 i = 0; i < viewer->visual_count; i++) {
+        if (!viewer->visuals[i].collision) {
+            draw_robot_visual(viewer, robot, &viewer->visuals[i], alpha, material);
         }
     }
+    if (!show_collisions) {
+        return;
+    }
+    rlDrawRenderBatchActive();
+    rlEnableWireMode();
+    for (u32 i = 0; i < viewer->visual_count; i++) {
+        if (viewer->visuals[i].collision) {
+            draw_robot_visual(viewer, robot, &viewer->visuals[i], alpha, material);
+        }
+    }
+    rlDrawRenderBatchActive();
+    rlDisableWireMode();
+}
+
+// Every boulder as one mesh of flat-shaded triangles, each rock a slightly different
+// grey-brown.
+static void build_boulder_mesh(Viewer *viewer, const Boulder_Field *field)
+{
+    if (field->vertex_count == 0) {
+        return;
+    }
+    Mesh mesh = {};
+    mesh.vertexCount = (int)field->vertex_count;
+    mesh.triangleCount = (int)(field->vertex_count / 3);
+    mesh.vertices = (float *)MemAlloc(field->vertex_count * 3 * sizeof(float));
+    mesh.normals = (float *)MemAlloc(field->vertex_count * 3 * sizeof(float));
+    mesh.colors = (unsigned char *)MemAlloc(field->vertex_count * 4);
+    for (u32 b = 0; b < field->count; b++) {
+        const Boulder *boulder = &field->boulders[b];
+        u32 hash = (b + 1) * 0x9e3779b1u;
+        hash ^= hash >> 15;
+        u8 grey = (u8)(118 + (hash & 31));
+        u8 warm = (u8)((hash >> 8) & 7);
+        for (u32 v = boulder->first_vertex; v < boulder->first_vertex + boulder->vertex_count;
+             v++) {
+            mesh.vertices[v * 3 + 0] = field->vertices[v].x;
+            mesh.vertices[v * 3 + 1] = field->vertices[v].y;
+            mesh.vertices[v * 3 + 2] = field->vertices[v].z;
+            mesh.normals[v * 3 + 0] = field->normals[v].x;
+            mesh.normals[v * 3 + 1] = field->normals[v].y;
+            mesh.normals[v * 3 + 2] = field->normals[v].z;
+            mesh.colors[v * 4 + 0] = (u8)(grey + warm);
+            mesh.colors[v * 4 + 1] = grey;
+            mesh.colors[v * 4 + 2] = (u8)(grey - 6);
+            mesh.colors[v * 4 + 3] = 255;
+        }
+    }
+    UploadMesh(&mesh, false);
+    viewer->boulder_mesh = mesh;
+    viewer->has_boulder_mesh = true;
 }
 
 bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocator)
@@ -430,15 +434,10 @@ bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocat
     create_ui(&viewer->ui);
     viewer->show_camera_preview = true;
 
-    viewer->lit = LoadShaderFromMemory(lit_vertex_shader, lit_fragment_shader);
-    viewer->lit.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(viewer->lit, "matModel");
-    viewer->lit.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(viewer->lit, "matNormal");
-    viewer->sun_direction_location = GetShaderLocation(viewer->lit, "sun_direction");
-    Vector3 sun_direction = Vector3Normalize(Vector3{-0.55f, 0.35f, -0.45f});
-    SetShaderValue(viewer->lit, viewer->sun_direction_location, &sun_direction,
-                   SHADER_UNIFORM_VEC3);
+    create_shading(&viewer->shading, &world->terrain, world->config.graphics_quality);
     viewer->material = LoadMaterialDefault();
-    viewer->material.shader = viewer->lit;
+    viewer->material.shader = viewer->shading.lit;
+    build_boulder_mesh(viewer, &world->boulders);
 
     const Terrain *terrain = &world->terrain;
     u32 tile_rows = (terrain->rows - 1 + TILE_CELLS - 1) / TILE_CELLS;
@@ -476,7 +475,13 @@ void destroy_viewer(Viewer *viewer)
         UnloadMesh(viewer->terrain_tiles[i]);
     }
     UnloadMesh(viewer->box);
-    UnloadMaterial(viewer->material); // also unloads the lit shader
+    if (viewer->has_boulder_mesh) {
+        UnloadMesh(viewer->boulder_mesh);
+    }
+    // The lit shader belongs to the shading, so the material mustn't unload it too.
+    viewer->material.shader.id = rlGetShaderIdDefault();
+    UnloadMaterial(viewer->material);
+    destroy_shading(&viewer->shading);
     destroy_ui(&viewer->ui);
     CloseWindow();
     *viewer = {};
@@ -485,10 +490,17 @@ void destroy_viewer(Viewer *viewer)
 void draw_scene(const Viewer *viewer, const World *world, f32 alpha, Material *material,
                 bool show_collisions)
 {
+    const Shading *shading = &viewer->shading;
+    set_shading_surface(shading, SURFACE_REGOLITH);
     material->maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     for (u32 i = 0; i < viewer->terrain_tile_count; i++) {
         DrawMesh(viewer->terrain_tiles[i], *material, MatrixIdentity());
     }
+    if (viewer->has_boulder_mesh) {
+        set_shading_surface(shading, SURFACE_ROCK);
+        DrawMesh(viewer->boulder_mesh, *material, MatrixIdentity());
+    }
+    set_shading_surface(shading, SURFACE_PLAIN);
     for (u32 i = 0; i < world->prop_count; i++) {
         const Prop *prop = &world->props[i];
         material->maps[MATERIAL_MAP_DIFFUSE].color =
@@ -499,6 +511,42 @@ void draw_scene(const Viewer *viewer, const World *world, f32 alpha, Material *m
     }
     if (world->has_robot) {
         draw_robot(viewer, world, alpha, material, show_collisions);
+    }
+}
+
+struct Shadow_Casters {
+    const Viewer *viewer;
+    const World *world;
+    f32 alpha;
+};
+
+// Everything that casts a shadow, drawn depth-only. Below high quality the robot casts its
+// collision shapes, a few hundred triangles instead of its full meshes.
+static void draw_shadow_casters(void *context, Material *material)
+{
+    const Shadow_Casters *casters = (const Shadow_Casters *)context;
+    const Viewer *viewer = casters->viewer;
+    const World *world = casters->world;
+    for (u32 i = 0; i < viewer->terrain_tile_count; i++) {
+        DrawMesh(viewer->terrain_tiles[i], *material, MatrixIdentity());
+    }
+    if (viewer->has_boulder_mesh) {
+        DrawMesh(viewer->boulder_mesh, *material, MatrixIdentity());
+    }
+    for (u32 i = 0; i < world->prop_count; i++) {
+        const Prop *prop = &world->props[i];
+        Vector3 size = convert_vector3(2.0f * prop->half_extents);
+        DrawMesh(viewer->box, *material,
+                 make_pose_matrix(prop->previous, prop->current, casters->alpha, size));
+    }
+    if (world->has_robot) {
+        bool collisions = viewer->shading.quality < 2;
+        for (u32 i = 0; i < viewer->visual_count; i++) {
+            if (viewer->visuals[i].collision == collisions) {
+                draw_robot_visual(viewer, &world->robot, &viewer->visuals[i], casters->alpha,
+                                  material);
+            }
+        }
     }
 }
 
@@ -750,7 +798,21 @@ static void draw_side_panel(Viewer *viewer, const World *world, const Frame_Stat
     y += ROW_HEIGHT;
     draw_ui_toggle(ui, Rectangle{x, y, width, ROW_HEIGHT}, "Camera preview", NULL,
                    &viewer->show_camera_preview, viewer->camera_preview != NULL);
-    y += ROW_HEIGHT + 14.0f;
+    y += ROW_HEIGHT + 4.0f;
+
+    // Graphics quality: shadows and surface detail cost the most, so they go first.
+    draw_ui_text(ui, UI_FONT_BODY, "Graphics", x,
+                 y + 0.5f * (28.0f - get_ui_font_size(ui, UI_FONT_BODY)), theme->text);
+    const char *levels[3] = {"LOW", "MED", "HIGH"};
+    Color accents[3] = {theme->blue, theme->blue, theme->blue};
+    f32 levels_width = 0.62f * width;
+    i32 level = draw_ui_segmented(ui, Rectangle{x + width - levels_width, y, levels_width, 28.0f},
+                                  levels, accents, 3, viewer->shading.quality);
+    if (level >= 0 && (u32)level != viewer->shading.quality) {
+        set_shading_quality(&viewer->shading, (u32)level);
+        log_info("viewer: graphics %s", levels[level]);
+    }
+    y += 28.0f + 18.0f;
 
     draw_ui_section(ui, "SENSORS", x, &y, width);
     const Sim_Config *config = &world->config;
@@ -871,12 +933,24 @@ Viewer_Actions draw_frame(Viewer *viewer, const World *world, f32 alpha, const F
     actions.reset_robot = IsKeyPressed(KEY_R);
     actions.single_step = IsKeyPressed(KEY_N);
 
+    // Shadows first, into their own map, centred on the robot (or wherever the view is).
+    Vector3 focus = viewer->camera.target;
+    if (world->has_robot) {
+        focus = convert_vector3(get_link_pose(&world->robot, world->robot.model.root, alpha).p);
+    }
+    Shadow_Casters casters = {.viewer = viewer, .world = world, .alpha = alpha};
+    render_shadow_map(&viewer->shading, focus, draw_shadow_casters, &casters);
+
     BeginDrawing();
     ClearBackground(BLACK);
     Rectangle view = get_view_area();
-    begin_view_3d(make_camera_from_orbit(&viewer->camera), view);
+    Camera3D camera = make_camera_from_orbit(&viewer->camera);
+    draw_stars(&viewer->shading, camera, view);
+    begin_view_3d(camera, view);
 
+    begin_lit_drawing(&viewer->shading);
     draw_scene(viewer, world, alpha, &viewer->material, viewer->show_collisions);
+    end_lit_drawing();
     if (viewer->show_lidar) {
         draw_lidar_points(world);
     }

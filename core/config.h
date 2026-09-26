@@ -80,6 +80,8 @@ struct Sim_Config {
     f32 terrain_relief; // m, amplitude of the procedural hills
     u32 terrain_seed;
     u32 crater_count;
+    u32 boulder_count; // fixed rocks scattered over the terrain; 0 for none
+    f32 boulder_size[2]; // m, smallest and largest
     f32 terrain_friction;
 
     char robot_urdf[CONFIG_STRING_SIZE]; // URDF file; empty to wait for /robot_description
@@ -98,6 +100,8 @@ struct Sim_Config {
     Imu_Config imu;
     Camera_Config camera;
     u32 sensor_seed; // noise seed, so sensor output is repeatable
+
+    u32 graphics_quality; // 0 low, 1 medium, 2 high: shadows and terrain detail
 };
 
 // The settings schema: one row per setting, the single source of truth for its key,
