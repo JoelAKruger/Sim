@@ -4,8 +4,10 @@
 #include <raymath.h>
 #include <rlgl.h>
 
-#define SHADOW_EXTENT 60.0f // m covered by the shadow map, centred on the focus
-#define SHADOW_DISTANCE 150.0f // m from the focus back towards the sun, for the shadow camera
+#define SHADOW_ROBOT_RADIUS 6.0f // m, the finest cascade: the square around the robot
+#define SHADOW_WIDE_RADIUS 50.0f // m, the coarsest: around the robot, for the sensor camera
+#define SHADOW_VIEW_FAR 150.0f // m, beyond which the view cascades stop
+#define SHADOW_DISTANCE 150.0f // m back towards the sun from a cascade, so up-sun hills cast too
 #define SHADOW_MAP_SLOT 10 // texture unit the shadow map is bound to; the material maps use 0..
 #define EDGE_FADE 30.0f // m over which the terrain fades to black at its edges
 
@@ -40,10 +42,10 @@ in vec3 frag_normal;
 in vec4 frag_color;
 uniform vec4 colDiffuse;
 uniform vec3 sun_direction;
-uniform mat4 light_matrix;
+uniform mat4 light_matrices[4];
+uniform vec4 cascade_texel;
 uniform sampler2D shadow_map;
 uniform int shadow_filter;
-uniform float shadow_texel;
 uniform int surface;
 uniform float detail;
 uniform vec4 terrain_bounds;
@@ -66,31 +68,54 @@ float noise(vec2 p)
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+// Whether a depth texel lets the sun through, bilinearly between the four texels around uv,
+// so a shadow edge is a smooth ramp rather than a staircase.
+float get_lit_bilinear(vec2 uv, float depth, vec2 texel)
+{
+    vec2 pixel = uv / texel - 0.5;
+    vec2 f = fract(pixel);
+    vec2 base = (floor(pixel) + 0.5) * texel;
+    float a = step(depth, texture(shadow_map, base).r);
+    float b = step(depth, texture(shadow_map, base + vec2(texel.x, 0.0)).r);
+    float c = step(depth, texture(shadow_map, base + vec2(0.0, texel.y)).r);
+    float d = step(depth, texture(shadow_map, base + texel).r);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 float get_sunlight(vec3 position, vec3 normal)
 {
     if (shadow_filter == 0) {
         return 1.0;
     }
-    // Looked up a little way out along the normal, which keeps flat ground free of acne.
-    vec4 clip = light_matrix * vec4(position + normal * 1.5 * shadow_texel, 1.0);
-    vec3 coords = clip.xyz / clip.w * 0.5 + 0.5;
-    if (coords.x <= 0.0 || coords.x >= 1.0 || coords.y <= 0.0 || coords.y >= 1.0 ||
-        coords.z >= 1.0) {
-        return 1.0;
-    }
     vec2 texel = 1.0 / vec2(textureSize(shadow_map, 0));
-    float lit = 0.0;
-    float count = 0.0;
-    for (int x = -shadow_filter; x <= shadow_filter; x++) {
-        for (int y = -shadow_filter; y <= shadow_filter; y++) {
-            float depth = texture(shadow_map, coords.xy + vec2(x, y) * texel).r;
-            lit += coords.z - 0.0003 > depth ? 0.0 : 1.0;
-            count += 1.0;
+    // The finest cascade that covers this point, with room for the filter at its edges.
+    float margin = 4.0 * texel.x * 2.0; // in a cascade's own 0..1 range
+    for (int i = 0; i < 4; i++) {
+        // Looked up a little way out along the normal, which keeps flat ground free of acne.
+        vec4 clip = light_matrices[i] * vec4(position + normal * 1.5 * cascade_texel[i], 1.0);
+        vec3 coords = clip.xyz / clip.w * 0.5 + 0.5;
+        if (coords.x < margin || coords.x > 1.0 - margin || coords.y < margin ||
+            coords.y > 1.0 - margin || coords.z >= 1.0) {
+            continue;
         }
+        // Cascades sit in a 2 × 2 atlas.
+        vec2 tile = vec2(mod(float(i), 2.0), floor(float(i) / 2.0)) * 0.5;
+        vec2 uv = tile + coords.xy * 0.5;
+        float depth = coords.z - 0.00005;
+        float lit = 0.0;
+        float count = 0.0;
+        // 2 × 2 taps (medium) or 3 × 3 (high), each itself bilinear.
+        float start = shadow_filter == 1 ? -0.5 : -1.0;
+        float end = -start + 0.01;
+        for (float x = start; x <= end; x += 1.0) {
+            for (float y = start; y <= end; y += 1.0) {
+                lit += get_lit_bilinear(uv + vec2(x, y) * texel, depth, texel);
+                count += 1.0;
+            }
+        }
+        return lit / count;
     }
-    // Shadows thin out towards the edge of the mapped square instead of stopping dead.
-    vec2 edge = min(coords.xy, 1.0 - coords.xy);
-    return mix(1.0, lit / count, smoothstep(0.0, 0.05, min(edge.x, edge.y)));
+    return 1.0;
 }
 
 void main()
@@ -184,7 +209,7 @@ static void load_shadow_map(Shading *shading, i32 size)
 void set_shading_quality(Shading *shading, u32 quality)
 {
     shading->quality = min(quality, 2u);
-    i32 filter = (i32)shading->quality; // 0 off, 1 = 3×3, 2 = 5×5
+    i32 filter = (i32)shading->quality; // 0 off, 1 = 2×2 taps, 2 = 3×3
     i32 size = shading->quality == 0 ? 0 : shading->quality == 1 ? 2048 : 4096;
     if (size != shading->shadow_size) {
         if (size == 0) {
@@ -196,10 +221,8 @@ void set_shading_quality(Shading *shading, u32 quality)
     if (!shading->shadow_framebuffer) {
         filter = 0;
     }
-    f32 texel = shading->shadow_size ? shading->shadow_extent / (f32)shading->shadow_size : 0.0f;
     f32 detail = shading->quality > 0 ? 1.0f : 0.0f;
     SetShaderValue(shading->lit, shading->shadow_filter_location, &filter, SHADER_UNIFORM_INT);
-    SetShaderValue(shading->lit, shading->shadow_texel_location, &texel, SHADER_UNIFORM_FLOAT);
     SetShaderValue(shading->lit, shading->detail_location, &detail, SHADER_UNIFORM_FLOAT);
 }
 
@@ -211,10 +234,10 @@ void create_shading(Shading *shading, const Terrain *terrain, u32 quality)
     lit->locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(*lit, "matModel");
     lit->locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(*lit, "matNormal");
     shading->sun_direction_location = GetShaderLocation(*lit, "sun_direction");
-    shading->light_matrix_location = GetShaderLocation(*lit, "light_matrix");
+    shading->light_matrices_location = GetShaderLocation(*lit, "light_matrices");
+    shading->cascade_texel_location = GetShaderLocation(*lit, "cascade_texel");
     shading->shadow_map_location = GetShaderLocation(*lit, "shadow_map");
     shading->shadow_filter_location = GetShaderLocation(*lit, "shadow_filter");
-    shading->shadow_texel_location = GetShaderLocation(*lit, "shadow_texel");
     shading->surface_location = GetShaderLocation(*lit, "surface");
     shading->detail_location = GetShaderLocation(*lit, "detail");
     shading->terrain_bounds_location = GetShaderLocation(*lit, "terrain_bounds");
@@ -237,8 +260,9 @@ void create_shading(Shading *shading, const Terrain *terrain, u32 quality)
     shading->caster = LoadShaderFromMemory(caster_vertex_shader, caster_fragment_shader);
     shading->caster_material = LoadMaterialDefault();
     shading->caster_material.shader = shading->caster;
-    shading->shadow_extent = SHADOW_EXTENT;
-    shading->light_matrix = MatrixIdentity();
+    for (u32 i = 0; i < SHADOW_CASCADES; i++) {
+        shading->cascades[i].light_matrix = MatrixIdentity();
+    }
     set_shading_quality(shading, quality);
 
     // A fixed sky: mostly faint stars, a few bright ones.
@@ -267,30 +291,51 @@ void set_shading_surface(const Shading *shading, Shading_Surface surface)
     SetShaderValue(shading->lit, shading->surface_location, &value, SHADER_UNIFORM_INT);
 }
 
-void render_shadow_map(Shading *shading, Vector3 focus, Shadow_Caster_Function *draw_casters,
-                       void *context)
+// The smallest sphere around a slice of the view frustum, near to far along the view. Its
+// size depends only on the slice and the lens, not on where the view points, so the
+// cascade doesn't change size as the view turns.
+static void fit_view_slice(Camera3D view, f32 aspect, f32 near, f32 far, Vector3 *center,
+                           f32 *radius)
+{
+    Vector3 forward = Vector3Normalize(Vector3Subtract(view.target, view.position));
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, view.up));
+    Vector3 up = Vector3CrossProduct(right, forward);
+    f32 tan_vertical = tanf(0.5f * view.fovy * DEG2RAD);
+    f32 tan_horizontal = tan_vertical * aspect;
+    *center = Vector3Add(view.position, Vector3Scale(forward, 0.5f * (near + far)));
+    *radius = 0.0f;
+    for (u32 corner = 0; corner < 8; corner++) {
+        f32 distance = corner & 4 ? far : near;
+        f32 side = corner & 1 ? 1.0f : -1.0f;
+        f32 height = corner & 2 ? 1.0f : -1.0f;
+        Vector3 point = Vector3Add(view.position, Vector3Scale(forward, distance));
+        point = Vector3Add(point, Vector3Scale(right, side * tan_horizontal * distance));
+        point = Vector3Add(point, Vector3Scale(up, height * tan_vertical * distance));
+        *radius = max(*radius, Vector3Distance(*center, point));
+    }
+    *radius = ceilf(*radius * 2.0f) * 0.5f; // steady through small changes, such as a resize
+}
+
+void render_shadow_map(Shading *shading, Camera3D view, f32 aspect, Vector3 focus,
+                       Shadow_Caster_Function *draw_casters, void *context)
 {
     if (!shading->shadow_framebuffer) {
         return;
     }
-    // Keep the map's texels fixed to the world as the focus moves, so shadow edges don't
-    // shimmer: snap the focus to whole texels across the light's view.
+    f32 orbit = Vector3Distance(view.position, view.target);
+    Shadow_Cascade *cascades = shading->cascades;
+    cascades[0].center = focus;
+    cascades[0].radius = SHADOW_ROBOT_RADIUS;
+    fit_view_slice(view, aspect, 0.05f, 0.8f * orbit, &cascades[1].center, &cascades[1].radius);
+    fit_view_slice(view, aspect, 0.8f * orbit, min(3.0f * orbit, SHADOW_VIEW_FAR),
+                   &cascades[2].center, &cascades[2].radius);
+    cascades[3].center = focus;
+    cascades[3].radius = SHADOW_WIDE_RADIUS;
+
     Vector3 forward = shading->sun_direction;
     Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, Vector3{0.0f, 0.0f, 1.0f}));
     Vector3 up = Vector3CrossProduct(right, forward);
-    f32 texel = shading->shadow_extent / (f32)shading->shadow_size;
-    f32 across = Vector3DotProduct(focus, right);
-    f32 along = Vector3DotProduct(focus, up);
-    focus = Vector3Add(focus, Vector3Scale(right, floorf(across / texel) * texel - across));
-    focus = Vector3Add(focus, Vector3Scale(up, floorf(along / texel) * texel - along));
-
-    Camera3D light = {};
-    light.position = Vector3Subtract(focus, Vector3Scale(forward, SHADOW_DISTANCE));
-    light.target = focus;
-    light.up = Vector3{0.0f, 0.0f, 1.0f};
-    light.fovy = shading->shadow_extent;
-    light.projection = CAMERA_ORTHOGRAPHIC;
-
+    i32 tile = shading->shadow_size / 2;
     RenderTexture2D target = {};
     target.id = shading->shadow_framebuffer;
     target.texture.width = shading->shadow_size;
@@ -298,18 +343,47 @@ void render_shadow_map(Shading *shading, Vector3 focus, Shadow_Caster_Function *
     target.depth.id = shading->shadow_depth;
     f64 near = rlGetCullDistanceNear();
     f64 far = rlGetCullDistanceFar();
-    rlSetClipPlanes(1.0, 2.0 * SHADOW_DISTANCE);
+    f32 texels[SHADOW_CASCADES];
+    Matrix matrices[SHADOW_CASCADES];
+
     BeginTextureMode(target);
     ClearBackground(WHITE);
-    BeginMode3D(light);
-    Matrix view = rlGetMatrixModelview();
-    Matrix projection = rlGetMatrixProjection();
-    draw_casters(context, &shading->caster_material);
-    EndMode3D();
+    for (u32 i = 0; i < SHADOW_CASCADES; i++) {
+        Shadow_Cascade *cascade = &cascades[i];
+        // Keep the map's texels fixed to the world as the cascade moves, so shadow edges
+        // don't shimmer: snap its centre to whole texels across the sun's view.
+        f32 texel = 2.0f * cascade->radius / (f32)tile;
+        f32 across = Vector3DotProduct(cascade->center, right);
+        f32 along = Vector3DotProduct(cascade->center, up);
+        Vector3 center = cascade->center;
+        center = Vector3Add(center, Vector3Scale(right, floorf(across / texel) * texel - across));
+        center = Vector3Add(center, Vector3Scale(up, floorf(along / texel) * texel - along));
+        cascade->center = center;
+
+        Camera3D light = {};
+        light.position = Vector3Subtract(center, Vector3Scale(forward, SHADOW_DISTANCE));
+        light.target = center;
+        light.up = Vector3{0.0f, 0.0f, 1.0f};
+        light.fovy = 2.0f * cascade->radius;
+        light.projection = CAMERA_ORTHOGRAPHIC;
+        rlViewport((i32)(i % 2) * tile, (i32)(i / 2) * tile, tile, tile);
+        rlSetClipPlanes(1.0, SHADOW_DISTANCE + cascade->radius + 50.0);
+        BeginMode3D(light);
+        Matrix light_view = rlGetMatrixModelview();
+        Matrix light_projection = rlGetMatrixProjection();
+        draw_casters(context, &shading->caster_material, center, cascade->radius);
+        EndMode3D();
+        cascade->light_matrix = MatrixMultiply(light_view, light_projection);
+        matrices[i] = cascade->light_matrix;
+        texels[i] = texel;
+    }
     EndTextureMode();
     rlSetClipPlanes(near, far);
-    shading->light_matrix = MatrixMultiply(view, projection);
-    SetShaderValueMatrix(shading->lit, shading->light_matrix_location, shading->light_matrix);
+
+    rlEnableShader(shading->lit.id);
+    rlSetUniformMatrices(shading->light_matrices_location, matrices, SHADOW_CASCADES);
+    rlDisableShader();
+    SetShaderValue(shading->lit, shading->cascade_texel_location, texels, SHADER_UNIFORM_VEC4);
 }
 
 void begin_lit_drawing(const Shading *shading)

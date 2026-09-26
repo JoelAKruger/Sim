@@ -58,6 +58,7 @@ struct Viewer {
     Shading shading; // the lit shader, shadows and stars
     Material material; // draws with shading.lit
     Mesh *terrain_tiles;
+    Vector4 *terrain_tile_bounds; // per tile: a bounding sphere (x, y, z, radius)
     u32 terrain_tile_count;
     Mesh box;
     Mesh boulder_mesh; // every boulder, in world space

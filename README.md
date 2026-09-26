@@ -305,8 +305,18 @@ looks for speed:
 | | shadows | surface grain |
 |---|---|---|
 | LOW | none | none |
-| MED | 2048² map, 3×3 filter, rover shadow from its collision shapes | yes |
-| HIGH | 4096² map, 5×5 filter, rover shadow from its full meshes | yes |
+| MED | four 1024² cascades, 2×2 smooth taps, rover shadow from its collision shapes | yes |
+| HIGH | four 2048² cascades, 3×3 smooth taps, rover shadow from its full meshes | yes |
+
+**Shadow cascades:** four shadow maps cover different areas, and each point uses the
+finest one that covers it:
+- 12 m around the rover, which keeps the rover's own shadow sharp;
+- the near part of the view, out to 0.8 × the orbit distance;
+- the rest of the view, out to 3 × the orbit distance;
+- 100 m around the rover, so the sensor camera always has shadows.
+
+They follow the rover and the view, snapped to their texels so edges don't shimmer, and
+are filtered bilinearly so edges are smooth, not stepped.
 
 Text is JetBrains Mono. The font is copied into the binary at build time
 (`REGOLITH_FONT_REGULAR` and `REGOLITH_FONT_BOLD`, which Nix sets), so nothing is loaded

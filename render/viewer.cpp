@@ -373,6 +373,28 @@ static void draw_robot(const Viewer *viewer, const World *world, f32 alpha, Mate
     rlDisableWireMode();
 }
 
+// A sphere around a terrain tile, so the shadow pass can skip tiles a cascade can't see.
+static Vector4 get_terrain_tile_bounds(const Terrain *terrain, u32 first_row, u32 first_col,
+                                       u32 cell_rows, u32 cell_cols)
+{
+    f32 lowest = INFINITY;
+    f32 highest = -INFINITY;
+    for (u32 r = 0; r <= cell_rows; r++) {
+        for (u32 c = 0; c <= cell_cols; c++) {
+            f32 height = get_sample_height(terrain, (i32)(first_row + r), (i32)(first_col + c));
+            lowest = min(lowest, height);
+            highest = max(highest, height);
+        }
+    }
+    f32 half_x = 0.5f * (f32)cell_cols * terrain->spacing;
+    f32 half_y = 0.5f * (f32)cell_rows * terrain->spacing;
+    f32 half_z = 0.5f * (highest - lowest);
+    return Vector4{terrain->origin_x + (f32)first_col * terrain->spacing + half_x,
+                   terrain->origin_y - (f32)first_row * terrain->spacing - half_y,
+                   0.5f * (lowest + highest),
+                   sqrtf(half_x * half_x + half_y * half_y + half_z * half_z)};
+}
+
 // Every boulder as one mesh of flat-shaded triangles, each rock a slightly different
 // grey-brown.
 static void build_boulder_mesh(Viewer *viewer, const Boulder_Field *field)
@@ -443,7 +465,8 @@ bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocat
     u32 tile_rows = (terrain->rows - 1 + TILE_CELLS - 1) / TILE_CELLS;
     u32 tile_cols = (terrain->cols - 1 + TILE_CELLS - 1) / TILE_CELLS;
     viewer->terrain_tiles = ALLOCATE_ARRAY(allocator, Mesh, tile_rows * tile_cols);
-    if (!viewer->terrain_tiles) {
+    viewer->terrain_tile_bounds = ALLOCATE_ARRAY(allocator, Vector4, tile_rows * tile_cols);
+    if (!viewer->terrain_tiles || !viewer->terrain_tile_bounds) {
         return false;
     }
     for (u32 tile_row = 0; tile_row < tile_rows; tile_row++) {
@@ -452,6 +475,8 @@ bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocat
             u32 first_col = tile_col * TILE_CELLS;
             u32 cell_rows = min((u32)TILE_CELLS, terrain->rows - 1 - first_row);
             u32 cell_cols = min((u32)TILE_CELLS, terrain->cols - 1 - first_col);
+            viewer->terrain_tile_bounds[viewer->terrain_tile_count] =
+                get_terrain_tile_bounds(terrain, first_row, first_col, cell_rows, cell_cols);
             viewer->terrain_tiles[viewer->terrain_tile_count++] =
                 build_terrain_tile(terrain, first_row, first_col, cell_rows, cell_cols);
         }
@@ -522,12 +547,21 @@ struct Shadow_Casters {
 
 // Everything that casts a shadow, drawn depth-only. Below high quality the robot casts its
 // collision shapes, a few hundred triangles instead of its full meshes.
-static void draw_shadow_casters(void *context, Material *material)
+static void draw_shadow_casters(void *context, Material *material, Vector3 center, f32 radius)
 {
     const Shadow_Casters *casters = (const Shadow_Casters *)context;
     const Viewer *viewer = casters->viewer;
     const World *world = casters->world;
+    // Only the terrain tiles this cascade can see: those within its square across the sun's
+    // direction. Tiles up-sun still count, since they can cast onto it.
+    Vector3 sun = viewer->shading.sun_direction;
     for (u32 i = 0; i < viewer->terrain_tile_count; i++) {
+        Vector4 bounds = viewer->terrain_tile_bounds[i];
+        Vector3 offset = Vector3Subtract(Vector3{bounds.x, bounds.y, bounds.z}, center);
+        Vector3 across = Vector3Subtract(offset, Vector3Scale(sun, Vector3DotProduct(offset, sun)));
+        if (Vector3Length(across) > 1.415f * radius + bounds.w) {
+            continue;
+        }
         DrawMesh(viewer->terrain_tiles[i], *material, MatrixIdentity());
     }
     if (viewer->has_boulder_mesh) {
@@ -939,7 +973,9 @@ Viewer_Actions draw_frame(Viewer *viewer, const World *world, f32 alpha, const F
         focus = convert_vector3(get_link_pose(&world->robot, world->robot.model.root, alpha).p);
     }
     Shadow_Casters casters = {.viewer = viewer, .world = world, .alpha = alpha};
-    render_shadow_map(&viewer->shading, focus, draw_shadow_casters, &casters);
+    Rectangle area = get_view_area();
+    render_shadow_map(&viewer->shading, make_camera_from_orbit(&viewer->camera),
+                      area.width / area.height, focus, draw_shadow_casters, &casters);
 
     BeginDrawing();
     ClearBackground(BLACK);
