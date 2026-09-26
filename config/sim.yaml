@@ -32,7 +32,7 @@ regolith:
       speed_mps: 0.6               # m/s at full keyboard drive; no wheel goes faster over the ground
       turn_rate: 0.8               # rad/s turning on the spot; arcs are scaled to teleop.speed_mps
     lidar:
-      enabled: true               # simulate the Livox Mid-360
+      enabled: true                # simulate the Livox Mid-360
       frame: "livox_frame"         # URDF link the LiDAR is on (x forward, z up); also the frame_id
       topic: "/livox/lidar"        # PointCloud2, livox_ros_driver2 xfer_format 0 layout
       rate_hz: 10.0                # frames per second (the driver's publish_freq)
@@ -43,7 +43,7 @@ regolith:
       reflectivity: 60.0           # intensity of a head-on hit; scaled by the incidence cosine
       threads: 4                   # threads casting rays; the output is the same for any number
     imu:
-      enabled: true               # simulate the Mid-360's IMU
+      enabled: true                # simulate the Mid-360's IMU
       frame: "livox_frame"         # URDF link the IMU is on; also the frame_id
       topic: "/livox/imu"          # sensor_msgs/Imu, without orientation
       rate_hz: 200.0               # samples per second; at most world.physics_hz
@@ -53,15 +53,20 @@ regolith:
       gyro_bias_walk: 1e-05        # rad/s²/√Hz gyro bias random walk
       accel_bias_walk: 0.0001      # m/s³/√Hz accelerometer bias random walk
     camera:
-      enabled: true               # simulate the RGB-D camera (needs the window)
       name: "d415"                 # realsense2_camera camera_name; mounted on the URDF link <name>_link
-      color_offset_m: [0.0, 0.015, 0.0] # colour sensor from <name>_link (D4xx: 15 mm left)
-      resolution: [640, 480]       # pixels, width and height of both images
-      rate_hz: 30.0                # frames per second of sim time
-      horizontal_fov_deg: 69.4     # colour; pixels are square and centred
-      depth_horizontal_fov_deg: 69.4 # depth; pixels are square and centred
-      depth_range_m: [0.1, 10.0]   # nearest and farthest depth; outside it a pixel is 0
-      color_topic: "/camera/camera/color/image_raw" # rgb8 Image; its CameraInfo goes to the sibling camera_info
-      depth_topic: "/camera/camera/depth/image_rect_raw" # 16UC1 Image in mm; its CameraInfo goes to the sibling camera_info
+      color:
+        enabled: true              # simulate the colour stream (needs the window)
+        resolution: [640, 360]     # pixels, width and height
+        rate_hz: 30.0              # frames per second of sim time
+        horizontal_fov_deg: 69.4   # pixels are square and centred
+        offset_m: [0.0, 0.015, 0.0] # colour sensor from <name>_link (D4xx: 15 mm left)
+        topic: "/d415/color/image_raw" # rgb8 Image; its CameraInfo goes to the sibling camera_info
+      depth:
+        enabled: true              # simulate the depth stream (needs the window)
+        resolution: [640, 360]     # pixels, width and height
+        rate_hz: 30.0              # frames per second of sim time
+        horizontal_fov_deg: 69.4   # pixels are square and centred
+        range_m: [0.1, 10.0]       # nearest and farthest; outside it a pixel is 0 (no data)
+        topic: "/d415/depth/image_rect_raw" # 16UC1 Image in mm; its CameraInfo goes to the sibling camera_info
     sensors:
       seed: 1                      # noise seed; the same seed gives the same readings

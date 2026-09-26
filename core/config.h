@@ -38,22 +38,32 @@ struct Imu_Config {
     f32 accel_bias_walk; // m/s³/√Hz
 };
 
+// One image stream of the camera (colour or depth), set up independently, as
+// realsense2_camera's colour and depth profiles are.
+struct Camera_Stream_Config {
+    bool enabled;
+    u32 resolution[2]; // pixels, width and height
+    f32 rate; // frames per second of sim time
+    f32 horizontal_fov; // degrees; pixels are square and centred
+    char topic[CONFIG_STRING_SIZE]; // the Image; its CameraInfo goes to the sibling camera_info
+};
+
 // An RGB-D camera, published as realsense2_camera does. Generic: every parameter is here.
 // It sits on the URDF link <name>_link (x forward, z up), as the RealSense description
 // names it. The driver's optical frames hang off that link: depth at its origin, colour at
-// color_offset, both turned to z forward, x right, y down.
+// color_offset, both turned to z forward, x right, y down. It is on when either stream is.
 struct Camera_Config {
-    bool enabled;
     char name[CONFIG_STRING_SIZE]; // the driver's camera_name: frames are <name>_link, etc.
+    Camera_Stream_Config color;
     f32 color_offset[3]; // m, the colour sensor from <name>_link, in that link's axes
-    u32 resolution[2]; // pixels, width and height, for both images
-    f32 rate; // frames per second
-    f32 horizontal_fov; // degrees, colour
-    f32 depth_horizontal_fov; // degrees
+    Camera_Stream_Config depth;
     f32 depth_range[2]; // m; outside it a depth pixel is 0 (no data)
-    char color_topic[CONFIG_STRING_SIZE];
-    char depth_topic[CONFIG_STRING_SIZE];
 };
+
+inline bool is_camera_enabled(const Camera_Config *camera)
+{
+    return camera->color.enabled || camera->depth.enabled;
+}
 
 // Every tunable the core reads. Plain data, so any front end (a config file, ROS
 // parameters) can fill it without knowing anything about Box3D.

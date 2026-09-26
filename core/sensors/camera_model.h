@@ -65,26 +65,21 @@ inline u16 encode_depth_mm(f32 metres, f32 near, f32 far)
 // The depth pass writes millimetres into the red (high byte) and green (low byte) channels.
 inline u16 unpack_depth_mm(u8 high, u8 low) { return (u16)(high << 8 | low); }
 
-// A frame as it crosses to the ROS thread: this header, then width·height·3 bytes of rgb8,
-// padded to an even length, then width·height 16-bit depths; rows top first.
+// A frame as it crosses to the ROS thread: this header, then the pixels, rows top first:
+// rgb8 for colour, 16-bit millimetres for depth.
 struct Camera_Frame_Header {
     u64 stamp_ns; // sim time
     u32 width;
     u32 height;
 };
 
-inline u64 get_camera_rgb_size(u32 width, u32 height)
+inline u64 get_color_frame_size(u32 width, u32 height)
 {
-    return ((u64)width * height * 3 + 1) & ~1ull;
+    return sizeof(Camera_Frame_Header) + (u64)width * height * 3;
 }
-
-inline u64 get_camera_frame_size(u32 width, u32 height)
+inline u64 get_depth_frame_size(u32 width, u32 height)
 {
-    return sizeof(Camera_Frame_Header) + get_camera_rgb_size(width, height) +
-           (u64)width * height * 2;
+    return sizeof(Camera_Frame_Header) + (u64)width * height * 2;
 }
-inline u8 *get_camera_frame_rgb(Camera_Frame_Header *frame) { return (u8 *)(frame + 1); }
-inline u16 *get_camera_frame_depth(Camera_Frame_Header *frame)
-{
-    return (u16 *)(get_camera_frame_rgb(frame) + get_camera_rgb_size(frame->width, frame->height));
-}
+inline u8 *get_color_pixels(Camera_Frame_Header *frame) { return (u8 *)(frame + 1); }
+inline u16 *get_depth_pixels(Camera_Frame_Header *frame) { return (u16 *)(frame + 1); }

@@ -35,6 +35,17 @@ void main()
 }
 )glsl";
 
+static void create_stream(Camera_Stream *stream, const Camera_Stream_Config *config, v3 offset)
+{
+    stream->config = config;
+    stream->in_link = get_optical_transform(offset);
+    stream->intrinsics = make_camera_intrinsics(config->resolution[0], config->resolution[1],
+                                                config->horizontal_fov);
+    if (config->enabled) {
+        stream->target = LoadRenderTexture((i32)config->resolution[0], (i32)config->resolution[1]);
+    }
+}
+
 bool create_sensor_camera(Sensor_Camera *camera, const Camera_Config *config, const World *world,
                           char *error, u32 error_size)
 {
@@ -46,41 +57,59 @@ bool create_sensor_camera(Sensor_Camera *camera, const Camera_Config *config, co
         return false;
     }
     const f32 *offset = config->color_offset;
-    camera->color_in_link = get_optical_transform(v3{offset[0], offset[1], offset[2]});
-    camera->depth_in_link = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
-    u32 width = config->resolution[0];
-    u32 height = config->resolution[1];
-    camera->color = make_camera_intrinsics(width, height, config->horizontal_fov);
-    camera->depth = make_camera_intrinsics(width, height, config->depth_horizontal_fov);
-    camera->color_target = LoadRenderTexture((i32)width, (i32)height);
-    camera->depth_target = LoadRenderTexture((i32)width, (i32)height);
+    create_stream(&camera->color, &config->color, v3{offset[0], offset[1], offset[2]});
+    create_stream(&camera->depth, &config->depth, v3{0.0f, 0.0f, 0.0f});
     camera->depth_shader = LoadShaderFromMemory(depth_vertex_shader, depth_fragment_shader);
     camera->near_location = GetShaderLocation(camera->depth_shader, "near_plane");
     camera->far_location = GetShaderLocation(camera->depth_shader, "far_plane");
     camera->range_location = GetShaderLocation(camera->depth_shader, "depth_range");
     camera->depth_material = LoadMaterialDefault();
     camera->depth_material.shader = camera->depth_shader;
-    camera->staging = (u8 *)MemAlloc(width * height * 4);
+    u64 pixels = 0;
+    for (u32 i = 0; i < 2; i++) {
+        const Camera_Stream_Config *stream = i == 0 ? &config->color : &config->depth;
+        if (stream->enabled) {
+            pixels = max(pixels, (u64)stream->resolution[0] * stream->resolution[1]);
+        }
+    }
+    camera->staging = (u8 *)MemAlloc((u32)(pixels * 4));
     return true;
 }
 
 void destroy_sensor_camera(Sensor_Camera *camera)
 {
-    UnloadRenderTexture(camera->color_target);
-    UnloadRenderTexture(camera->depth_target);
+    if (camera->color.config->enabled) {
+        UnloadRenderTexture(camera->color.target);
+    }
+    if (camera->depth.config->enabled) {
+        UnloadRenderTexture(camera->depth.target);
+    }
     UnloadMaterial(camera->depth_material); // also unloads the depth shader
     MemFree(camera->staging);
     *camera = {};
 }
 
-static u64 get_frame_time_ns(const Sensor_Camera *camera, u64 frame)
+static u64 get_frame_time_ns(const Camera_Stream *stream, u64 frame)
 {
-    return (u64)((f64)frame * 1e9 / (f64)camera->config->rate);
+    return (u64)((f64)frame * 1e9 / (f64)stream->config->rate);
 }
 
-bool is_sensor_camera_due(const Sensor_Camera *camera, u64 sim_time_ns)
+bool is_camera_stream_due(const Camera_Stream *stream, u64 sim_time_ns)
 {
-    return sim_time_ns >= get_frame_time_ns(camera, camera->next_frame);
+    return stream->config->enabled && sim_time_ns >= get_frame_time_ns(stream, stream->next_frame);
+}
+
+// Moves the stream past every slot up to now: a slow renderer skips frames rather than
+// falling behind. Fills in the frame's header.
+static void advance_stream(Camera_Stream *stream, const World *world, Camera_Frame_Header *frame)
+{
+    u64 now = get_sim_time_ns(world);
+    while (now >= get_frame_time_ns(stream, stream->next_frame)) {
+        stream->next_frame++;
+    }
+    frame->stamp_ns = now;
+    frame->width = stream->intrinsics.width;
+    frame->height = stream->intrinsics.height;
 }
 
 // A Raylib camera looking along +z of an optical frame, with -y up.
@@ -95,6 +124,13 @@ static Camera3D make_optical_camera(b3Transform pose, const Camera_Intrinsics *i
     camera.fovy = get_vertical_fov_deg(intrinsics);
     camera.projection = CAMERA_PERSPECTIVE;
     return camera;
+}
+
+static Camera3D make_stream_camera(const Sensor_Camera *camera, const Camera_Stream *stream,
+                                   const World *world)
+{
+    b3Transform link_pose = get_sensor_pose(&world->robot, &camera->mount);
+    return make_optical_camera(b3MulTransforms(link_pose, stream->in_link), &stream->intrinsics);
 }
 
 // Reads a render target back, top row first (GL stores it bottom-up).
@@ -113,43 +149,50 @@ static void read_target(const RenderTexture2D *target, u8 *rgba, u32 width, u32 
     MemFree(pixels);
 }
 
-void render_sensor_camera(Sensor_Camera *camera, const Viewer *viewer, const World *world,
-                          Camera_Frame_Header *frame)
+// Colour: the lit scene, as the viewer draws it.
+void render_color_frame(Sensor_Camera *camera, const Viewer *viewer, const World *world,
+                        Camera_Frame_Header *frame)
 {
-    const Camera_Config *config = camera->config;
-    u32 width = camera->color.width;
-    u32 height = camera->color.height;
-    u64 now = get_sim_time_ns(world);
-    while (is_sensor_camera_due(camera, now)) {
-        camera->next_frame++; // a slow renderer skips frames rather than falling behind
-    }
-
-    b3Transform link_pose = get_sensor_pose(&world->robot, &camera->mount);
-
-    // Colour: the lit scene, as the viewer draws it.
+    Camera_Stream *stream = &camera->color;
+    advance_stream(stream, world, frame);
     Material color_material = viewer->material;
-    BeginTextureMode(camera->color_target);
+    BeginTextureMode(stream->target);
     ClearBackground(BLACK);
     rlSetClipPlanes(VIEWER_NEAR, VIEWER_FAR);
-    BeginMode3D(
-        make_optical_camera(b3MulTransforms(link_pose, camera->color_in_link), &camera->color));
+    BeginMode3D(make_stream_camera(camera, stream, world));
     draw_scene(viewer, world, 1.0f, &color_material, false);
     EndMode3D();
     EndTextureMode();
 
-    // Depth: the same scene through the depth shader, with clip planes just outside the
-    // depth range so the depth buffer spends its precision where it counts.
+    u32 width = frame->width;
+    u32 height = frame->height;
+    read_target(&stream->target, camera->staging, width, height);
+    u8 *rgb = get_color_pixels(frame);
+    for (u64 i = 0; i < (u64)width * height; i++) {
+        rgb[i * 3 + 0] = camera->staging[i * 4 + 0];
+        rgb[i * 3 + 1] = camera->staging[i * 4 + 1];
+        rgb[i * 3 + 2] = camera->staging[i * 4 + 2];
+    }
+}
+
+// Depth: the same scene through the depth shader, with clip planes just outside the depth
+// range so the depth buffer spends its precision where it counts.
+void render_depth_frame(Sensor_Camera *camera, const Viewer *viewer, const World *world,
+                        Camera_Frame_Header *frame)
+{
+    const Camera_Config *config = camera->config;
+    Camera_Stream *stream = &camera->depth;
+    advance_stream(stream, world, frame);
     f32 near_plane = 0.5f * config->depth_range[0];
     f32 far_plane = config->depth_range[1] + 1.0f;
     SetShaderValue(camera->depth_shader, camera->near_location, &near_plane, SHADER_UNIFORM_FLOAT);
     SetShaderValue(camera->depth_shader, camera->far_location, &far_plane, SHADER_UNIFORM_FLOAT);
     SetShaderValue(camera->depth_shader, camera->range_location, config->depth_range,
                    SHADER_UNIFORM_VEC2);
-    BeginTextureMode(camera->depth_target);
+    BeginTextureMode(stream->target);
     ClearBackground(BLANK); // no data
     rlSetClipPlanes(near_plane, far_plane);
-    BeginMode3D(
-        make_optical_camera(b3MulTransforms(link_pose, camera->depth_in_link), &camera->depth));
+    BeginMode3D(make_stream_camera(camera, stream, world));
     BeginShaderMode(camera->depth_shader); // for anything drawn without a material
     draw_scene(viewer, world, 1.0f, &camera->depth_material, false);
     EndShaderMode();
@@ -157,21 +200,11 @@ void render_sensor_camera(Sensor_Camera *camera, const Viewer *viewer, const Wor
     EndTextureMode();
     rlSetClipPlanes(VIEWER_NEAR, VIEWER_FAR);
 
-    // Both back into the frame, through the RGBA staging buffer.
-    u8 *rgba = camera->staging;
-    frame->stamp_ns = now;
-    frame->width = width;
-    frame->height = height;
-    u8 *rgb = get_camera_frame_rgb(frame);
-    read_target(&camera->color_target, rgba, width, height);
+    u32 width = frame->width;
+    u32 height = frame->height;
+    read_target(&stream->target, camera->staging, width, height);
+    u16 *depth = get_depth_pixels(frame);
     for (u64 i = 0; i < (u64)width * height; i++) {
-        rgb[i * 3 + 0] = rgba[i * 4 + 0];
-        rgb[i * 3 + 1] = rgba[i * 4 + 1];
-        rgb[i * 3 + 2] = rgba[i * 4 + 2];
-    }
-    u16 *depth = get_camera_frame_depth(frame);
-    read_target(&camera->depth_target, rgba, width, height);
-    for (u64 i = 0; i < (u64)width * height; i++) {
-        depth[i] = unpack_depth_mm(rgba[i * 4 + 0], rgba[i * 4 + 1]);
+        depth[i] = unpack_depth_mm(camera->staging[i * 4 + 0], camera->staging[i * 4 + 1]);
     }
 }

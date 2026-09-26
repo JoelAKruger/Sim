@@ -761,8 +761,12 @@ static void draw_side_panel(Viewer *viewer, const World *world, const Frame_Stat
     y += ROW_HEIGHT;
     char camera_link[CONFIG_STRING_SIZE + 16];
     make_camera_frame_name(config->camera.name, "_link", camera_link, sizeof(camera_link));
-    draw_sensor_row(ui, x, y, width, "Camera", viewer->camera_preview != NULL, camera_link,
-                    config->camera.rate);
+    // The viewer exists, so the window is there for the camera to render with.
+    draw_sensor_row(ui, x, y, width, "RGB", config->camera.color.enabled, camera_link,
+                    config->camera.color.rate);
+    y += ROW_HEIGHT;
+    draw_sensor_row(ui, x, y, width, "Depth", config->camera.depth.enabled, camera_link,
+                    config->camera.depth.rate);
 }
 
 // Every shortcut, along the bottom: the key bright, what it does dim.

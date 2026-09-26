@@ -113,13 +113,19 @@ bool create_shared_state(Shared_Global_State *shared, Linear_Allocator *allocato
 {
     u64 lidar_size =
         get_lidar_slot_size(config->lidar.enabled ? get_lidar_capacity(&config->lidar) : 0);
-    const u32 *resolution = config->camera.resolution;
-    u64 camera_size = config->camera.enabled ? get_camera_frame_size(resolution[0], resolution[1])
-                                             : sizeof(Camera_Frame_Header);
+    const Camera_Stream_Config *color = &config->camera.color;
+    const Camera_Stream_Config *depth = &config->camera.depth;
+    u64 color_size = color->enabled
+                         ? get_color_frame_size(color->resolution[0], color->resolution[1])
+                         : sizeof(Camera_Frame_Header);
+    u64 depth_size = depth->enabled
+                         ? get_depth_frame_size(depth->resolution[0], depth->resolution[1])
+                         : sizeof(Camera_Frame_Header);
     return create_ring_buffer(&shared->actuator_commands, allocator, sizeof(Actuator_Command),
                               1024) &&
            create_triple_buffer(&shared->status_light, allocator, sizeof(Status_Light)) &&
            create_ring_buffer(&shared->imu_samples, allocator, sizeof(Imu_Sample), 1024) &&
            create_triple_buffer(&shared->lidar_frames, allocator, lidar_size) &&
-           create_triple_buffer(&shared->camera_frames, allocator, camera_size);
+           create_triple_buffer(&shared->color_frames, allocator, color_size) &&
+           create_triple_buffer(&shared->depth_frames, allocator, depth_size);
 }

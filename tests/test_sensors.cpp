@@ -347,13 +347,12 @@ static void test_camera_model(void)
     CHECK(encode_depth_mm(65.0f, 0.1f, 70.0f) == 65000);
     CHECK(unpack_depth_mm(1500 >> 8, 1500 & 0xff) == 1500);
 
-    // Depth stays 2-byte aligned whatever the image size.
-    static u8 storage[64 + 17 * 17 * 5 + 8];
+    // Frames are a 16-byte header, then pixels, so depth stays aligned whatever the size.
+    static u64 storage[(64 + 17 * 17 * 3) / 8 + 1];
     Camera_Frame_Header *frame = (Camera_Frame_Header *)storage;
-    frame->width = frame->height = 17;
-    CHECK(((u8 *)get_camera_frame_depth(frame) - storage) % 2 == 0);
-    CHECK((u8 *)(get_camera_frame_depth(frame) + 17 * 17) - storage ==
-          (i64)get_camera_frame_size(17, 17));
+    CHECK((u8 *)get_depth_pixels(frame) - (u8 *)storage == 16);
+    CHECK(get_color_frame_size(17, 17) == 16 + 17 * 17 * 3);
+    CHECK(get_depth_frame_size(17, 17) == 16 + 17 * 17 * 2);
 }
 
 int main(int argc, char **argv)

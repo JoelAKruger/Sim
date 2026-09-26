@@ -10,9 +10,11 @@ static void test_schema(void)
     CHECK(validate_config(&config, error, sizeof(error)));
     for (u32 i = 0; i < config_field_count; i++) {
         const Config_Field *field = &config_fields[i];
-        // Keys are "section.name"; format_config and the YAML nesting rely on it.
+        // Keys are "section.name" or "section.subsection.name", with no empty parts;
+        // format_config and the YAML nesting rely on it.
         const char *dot = strchr(field->key, '.');
-        CHECK(dot && dot != field->key && strchr(dot + 1, '.') == NULL);
+        CHECK(dot && dot != field->key && strstr(field->key, "..") == NULL);
+        CHECK(field->key[strlen(field->key) - 1] != '.');
         CHECK(field->count >= 1 && field->count <= CONFIG_MAX_COUNT);
         CHECK(find_config_field(field->key) == field);
         // Every default must pass its own checks.
@@ -24,13 +26,15 @@ static void test_schema(void)
                              sizeof(error)));
         }
     }
-    // Sections must be contiguous, or --dump-config would repeat a section header.
+    // Sections and subsections must be contiguous, or --dump-config would repeat a header.
     for (u32 i = 1; i < config_field_count; i++) {
         const char *key = config_fields[i].key;
-        u32 length = (u32)(strchr(key, '.') - key);
-        bool same_as_previous = strncmp(config_fields[i - 1].key, key, length + 1) == 0;
-        for (u32 j = 0; j + 1 < i && !same_as_previous; j++) {
-            CHECK(strncmp(config_fields[j].key, key, length + 1) != 0);
+        for (const char *dot = strchr(key, '.'); dot; dot = strchr(dot + 1, '.')) {
+            u32 length = (u32)(dot - key) + 1; // the prefix, with its dot
+            bool same_as_previous = strncmp(config_fields[i - 1].key, key, length) == 0;
+            for (u32 j = 0; j + 1 < i && !same_as_previous; j++) {
+                CHECK(strncmp(config_fields[j].key, key, length) != 0);
+            }
         }
     }
 }
@@ -51,7 +55,7 @@ static void test_validate(void)
     config.terrain_heightmap[0] = 'm'; // a heightmap skips the size check, not the rest
     config.camera.depth_range[1] = 0.05f;
     CHECK(!validate_config(&config, error, sizeof(error)));
-    CHECK(strstr(error, "camera.depth_range_m") != NULL);
+    CHECK(strstr(error, "camera.depth.range_m") != NULL);
 }
 
 static void test_text(void)
@@ -164,7 +168,8 @@ static void test_load_text(void)
         {"# ok\nworld:\n  physics_hz: 5\n", "bad:3: world.physics_hz must be within"},
         {"just some words\n", "bad:1: expected \"key: value\""},
         {"lidar:\n  enabled: 1\n", "bad:2: lidar.enabled: expected true or false"},
-        {"camera:\n  enabled: yes please\n", "bad:2: camera.enabled: expected true or false"},
+        {"camera:\n  color:\n    enabled: yes please\n",
+         "bad:3: camera.color.enabled: expected true or false"},
     };
     for (u32 i = 0; i < ARRAY_COUNT(bad_files); i++) {
         Sim_Config scratch = get_default_config();
@@ -189,7 +194,11 @@ static void test_round_trip(void)
     snprintf(original.robot_urdf, sizeof(original.robot_urdf), "/home/nova/a \"quoted\" #path");
     original.lidar.enabled = true;
     original.imu.acceleration_in_g = false;
-    original.camera.resolution[0] = 1280;
+    original.camera.color.resolution[0] = 1280; // nested sections round-trip too
+    original.camera.depth.enabled = true;
+    char error_text[256];
+    CHECK(set_config_text(&original, "camera.depth.topic", "/d415/depth", error_text,
+                          sizeof(error_text)));
 
     static char text[16384];
     u32 length = format_config(&original, text, sizeof(text));

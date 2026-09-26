@@ -159,8 +159,11 @@ lidar:
 imu:
   enabled: true        # the Mid-360's own IMU, also on livox_frame
 camera:
-  enabled: true
   name: "d415"         # realsense2_camera camera_name: mounted on d415_link
+  color:
+    enabled: true
+  depth:
+    enabled: true
 ```
 
 - **LiDAR** (Livox Mid-360): `sensor_msgs/PointCloud2` on `/livox/lidar`, in
@@ -189,12 +192,18 @@ camera:
     data.
   - A `CameraInfo` for each, on the sibling `camera_info` topic.
 
-  **Settings:** the resolution, the rate, both fields of view and the depth range are all
-  settings.
+  **Settings:** colour and depth are separate streams, as the driver's colour and depth
+  profiles are. Each has its own section (`camera.color`, `camera.depth`) with:
+  - `enabled`, `resolution`, `rate_hz`, `horizontal_fov_deg` and `topic`;
+  - for colour, its sensor offset `offset_m`;
+  - for depth, its `range_m`.
+
+  They render independently, so they can differ in size and rate. The camera is on when
+  either stream is.
 
   **Frames:** the sim works like `realsense2_camera`.
   - **Mount:** the camera sits on `<name>_link` (x forward, z up).
-  - **Optical frames:** depth is at the link's origin and colour at `color_offset_m` (15 mm
+  - **Optical frames:** depth is at the link's origin and colour at `camera.color.offset_m` (15 mm
     to the left on a D4xx), each turned to z forward, x right, y down.
   - **Stamps:** the images carry `<name>_color_optical_frame` and
     `<name>_depth_optical_frame`.

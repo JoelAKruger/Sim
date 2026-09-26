@@ -49,7 +49,8 @@ struct Shared_Global_State {
     Triple_Buffer status_light; // Status_Light: CAN thread to sim, latest wins
     Ring_Buffer imu_samples; // Imu_Sample: sim to ROS
     Triple_Buffer lidar_frames; // Lidar_Frame_Header and its points: sim to ROS
-    Triple_Buffer camera_frames; // Camera_Frame_Header and its images: renderer to ROS
+    Triple_Buffer color_frames; // Camera_Frame_Header and rgb8 pixels: renderer to ROS
+    Triple_Buffer depth_frames; // Camera_Frame_Header and 16-bit depths: renderer to ROS
 };
 
 // Sensor buffers are sized for the config's sensors (and tiny for disabled ones).

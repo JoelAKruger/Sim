@@ -322,8 +322,8 @@ int main(int argc, char **argv)
     }
     // The camera renders with the viewer's GL context, so it needs the window.
     static Sensor_Camera sensor_camera;
-    bool camera_on = config.camera.enabled && !args.headless;
-    if (config.camera.enabled && args.headless) {
+    bool camera_on = is_camera_enabled(&config.camera) && !args.headless;
+    if (is_camera_enabled(&config.camera) && args.headless) {
         log_warning("camera: off in --headless (it renders with the window's GL context)");
     }
     if (camera_on) {
@@ -335,9 +335,17 @@ int main(int argc, char **argv)
             destroy_ros_bridge();
             return 1;
         }
-        viewer.camera_preview = &sensor_camera.color_target.texture;
-        log_info("camera %s on %s_link: %ux%u at %.0f Hz", config.camera.name, config.camera.name,
-                 config.camera.resolution[0], config.camera.resolution[1], (f64)config.camera.rate);
+        const Camera_Stream_Config *color = &config.camera.color;
+        const Camera_Stream_Config *depth = &config.camera.depth;
+        if (color->enabled) {
+            viewer.camera_preview = &sensor_camera.color.target.texture;
+            log_info("camera %s colour: %ux%u at %.0f Hz", config.camera.name, color->resolution[0],
+                     color->resolution[1], (f64)color->rate);
+        }
+        if (depth->enabled) {
+            log_info("camera %s depth: %ux%u at %.0f Hz", config.camera.name, depth->resolution[0],
+                     depth->resolution[1], (f64)depth->rate);
+        }
     }
     if (!start_can_thread(&shared, &config, &world.robot, &world.actuators) ||
         !start_ros_thread(&shared, &config)) {
@@ -408,11 +416,19 @@ int main(int argc, char **argv)
             if (args.screenshot_path && is_quit_requested(&shared)) {
                 viewer.screenshot_path = args.screenshot_path;
             }
-            if (camera_on && is_sensor_camera_due(&sensor_camera, get_sim_time_ns(&world))) {
+            // Each camera stream renders on its own sim-time slots.
+            u64 sim_now = get_sim_time_ns(&world);
+            if (camera_on && is_camera_stream_due(&sensor_camera.color, sim_now)) {
                 Camera_Frame_Header *slot =
-                    (Camera_Frame_Header *)get_triple_buffer_write_slot(&shared.camera_frames);
-                render_sensor_camera(&sensor_camera, &viewer, &world, slot);
-                publish_triple_buffer(&shared.camera_frames);
+                    (Camera_Frame_Header *)get_triple_buffer_write_slot(&shared.color_frames);
+                render_color_frame(&sensor_camera, &viewer, &world, slot);
+                publish_triple_buffer(&shared.color_frames);
+            }
+            if (camera_on && is_camera_stream_due(&sensor_camera.depth, sim_now)) {
+                Camera_Frame_Header *slot =
+                    (Camera_Frame_Header *)get_triple_buffer_write_slot(&shared.depth_frames);
+                render_depth_frame(&sensor_camera, &viewer, &world, slot);
+                publish_triple_buffer(&shared.depth_frames);
             }
             f32 alpha = paused ? 1.0f : (f32)(accumulator / step_seconds);
             Viewer_Actions actions = draw_frame(&viewer, &world, min(alpha, 1.0f), &pace.frame);

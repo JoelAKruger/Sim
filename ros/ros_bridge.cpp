@@ -346,17 +346,16 @@ static void init_camera_messages(sensor_msgs::msg::Image *image, sensor_msgs::ms
                camera->cy, 0.0, 0.0,        0.0, 1.0, 0.0};
 }
 
-static void publish_camera_frame(Camera_Frame_Header *frame)
+// One frame of a stream, with its CameraInfo carrying the same stamp.
+static void publish_camera_frame(Camera_Frame_Header *frame, sensor_msgs::msg::Image *image,
+                                 sensor_msgs::msg::CameraInfo *info,
+                                 rclcpp::Publisher<sensor_msgs::msg::Image> *image_publisher,
+                                 rclcpp::Publisher<sensor_msgs::msg::CameraInfo> *info_publisher)
 {
-    builtin_interfaces::msg::Time stamp = make_stamp(frame->stamp_ns);
-    ros.color_image.header.stamp = ros.color_info.header.stamp = stamp;
-    ros.depth_image.header.stamp = ros.depth_info.header.stamp = stamp;
-    memcpy(ros.color_image.data.data(), get_camera_frame_rgb(frame), ros.color_image.data.size());
-    memcpy(ros.depth_image.data.data(), get_camera_frame_depth(frame), ros.depth_image.data.size());
-    ros.color_publisher->publish(ros.color_image);
-    ros.color_info_publisher->publish(ros.color_info);
-    ros.depth_publisher->publish(ros.depth_image);
-    ros.depth_info_publisher->publish(ros.depth_info);
+    image->header.stamp = info->header.stamp = make_stamp(frame->stamp_ns);
+    memcpy(image->data.data(), (u8 *)(frame + 1), image->data.size());
+    image_publisher->publish(*image);
+    info_publisher->publish(*info);
 }
 
 static void add_static_transform(tf2_msgs::msg::TFMessage *message, const char *parent,
@@ -376,7 +375,7 @@ static void add_static_transform(tf2_msgs::msg::TFMessage *message, const char *
 }
 
 // The camera's own frames on /tf_static, as realsense2_camera publishes them (publish_tf):
-// <name>_link to the depth and colour frames, and each of those to its optical frame.
+// <name>_link to each enabled stream's frame, and that to its optical frame.
 // Latched, so late subscribers still get them. Nothing else goes on TF.
 static void publish_camera_transforms(const Camera_Config *camera)
 {
@@ -396,10 +395,14 @@ static void publish_camera_transforms(const Camera_Config *camera)
     b3Transform optical = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
 
     tf2_msgs::msg::TFMessage message;
-    add_static_transform(&message, link, depth, identity);
-    add_static_transform(&message, depth, depth_optical, optical);
-    add_static_transform(&message, link, color, color_offset);
-    add_static_transform(&message, color, color_optical, optical);
+    if (camera->depth.enabled) {
+        add_static_transform(&message, link, depth, identity);
+        add_static_transform(&message, depth, depth_optical, optical);
+    }
+    if (camera->color.enabled) {
+        add_static_transform(&message, link, color, color_offset);
+        add_static_transform(&message, color, color_optical, optical);
+    }
     ros.static_transform_publisher = ros.node->create_publisher<tf2_msgs::msg::TFMessage>(
         "/tf_static", rclcpp::QoS(1).reliable().transient_local());
     ros.static_transform_publisher->publish(message);
@@ -420,29 +423,33 @@ static void create_sensor_publishers(const Sim_Config *config)
         init_livox_cloud(&ros.cloud, &config->lidar);
     }
     // The camera renders only with the window; its topics exist whenever it is enabled.
-    if (config->camera.enabled) {
-        const Camera_Config *camera = &config->camera;
-        u32 width = camera->resolution[0];
-        u32 height = camera->resolution[1];
-        Camera_Intrinsics color = make_camera_intrinsics(width, height, camera->horizontal_fov);
-        Camera_Intrinsics depth =
-            make_camera_intrinsics(width, height, camera->depth_horizontal_fov);
-        char color_frame[CONFIG_STRING_SIZE + 32], depth_frame[CONFIG_STRING_SIZE + 32];
-        make_camera_frame_name(camera->name, "_color_optical_frame", color_frame,
-                               sizeof(color_frame));
-        make_camera_frame_name(camera->name, "_depth_optical_frame", depth_frame,
-                               sizeof(depth_frame));
-        init_camera_messages(&ros.color_image, &ros.color_info, &color, color_frame, "rgb8", 3);
-        init_camera_messages(&ros.depth_image, &ros.depth_info, &depth, depth_frame, "16UC1", 2);
+    const Camera_Config *camera = &config->camera;
+    if (is_camera_enabled(camera)) {
         publish_camera_transforms(camera);
+    }
+    if (camera->color.enabled) {
+        const Camera_Stream_Config *color = &camera->color;
+        Camera_Intrinsics intrinsics = make_camera_intrinsics(
+            color->resolution[0], color->resolution[1], color->horizontal_fov);
+        char frame[CONFIG_STRING_SIZE + 32];
+        make_camera_frame_name(camera->name, "_color_optical_frame", frame, sizeof(frame));
+        init_camera_messages(&ros.color_image, &ros.color_info, &intrinsics, frame, "rgb8", 3);
         ros.color_publisher =
-            node->create_publisher<sensor_msgs::msg::Image>(camera->color_topic, rclcpp::QoS(2));
-        ros.depth_publisher =
-            node->create_publisher<sensor_msgs::msg::Image>(camera->depth_topic, rclcpp::QoS(2));
+            node->create_publisher<sensor_msgs::msg::Image>(color->topic, rclcpp::QoS(2));
         ros.color_info_publisher = node->create_publisher<sensor_msgs::msg::CameraInfo>(
-            get_camera_info_topic(camera->color_topic), rclcpp::QoS(2));
+            get_camera_info_topic(color->topic), rclcpp::QoS(2));
+    }
+    if (camera->depth.enabled) {
+        const Camera_Stream_Config *depth = &camera->depth;
+        Camera_Intrinsics intrinsics = make_camera_intrinsics(
+            depth->resolution[0], depth->resolution[1], depth->horizontal_fov);
+        char frame[CONFIG_STRING_SIZE + 32];
+        make_camera_frame_name(camera->name, "_depth_optical_frame", frame, sizeof(frame));
+        init_camera_messages(&ros.depth_image, &ros.depth_info, &intrinsics, frame, "16UC1", 2);
+        ros.depth_publisher =
+            node->create_publisher<sensor_msgs::msg::Image>(depth->topic, rclcpp::QoS(2));
         ros.depth_info_publisher = node->create_publisher<sensor_msgs::msg::CameraInfo>(
-            get_camera_info_topic(camera->depth_topic), rclcpp::QoS(2));
+            get_camera_info_topic(depth->topic), rclcpp::QoS(2));
     }
 }
 
@@ -459,10 +466,17 @@ static void publish_sensors(void)
     if (lidar && ros.lidar_publisher) {
         publish_lidar_frame(lidar);
     }
-    Camera_Frame_Header *camera =
-        (Camera_Frame_Header *)read_triple_buffer(&ros.shared->camera_frames);
-    if (camera && ros.color_publisher) {
-        publish_camera_frame(camera);
+    Camera_Frame_Header *color =
+        (Camera_Frame_Header *)read_triple_buffer(&ros.shared->color_frames);
+    if (color && ros.color_publisher) {
+        publish_camera_frame(color, &ros.color_image, &ros.color_info, ros.color_publisher.get(),
+                             ros.color_info_publisher.get());
+    }
+    Camera_Frame_Header *depth =
+        (Camera_Frame_Header *)read_triple_buffer(&ros.shared->depth_frames);
+    if (depth && ros.depth_publisher) {
+        publish_camera_frame(depth, &ros.depth_image, &ros.depth_info, ros.depth_publisher.get(),
+                             ros.depth_info_publisher.get());
     }
 }
 

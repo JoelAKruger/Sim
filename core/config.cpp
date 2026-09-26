@@ -138,36 +138,47 @@ const Config_Field config_fields[] = {
      .offset = offsetof(Sim_Config, imu.accel_bias_walk), .minimum = 0.0, .maximum = 10.0,
      .defaults = {1e-4}, .help = "m/s³/√Hz accelerometer bias random walk"},
 
-    {.key = "camera.enabled", .type = CONFIG_BOOL, .count = 1,
-     .offset = offsetof(Sim_Config, camera.enabled), .minimum = 0.0, .maximum = 1.0,
-     .defaults = {0.0}, .help = "simulate the RGB-D camera (needs the window)"},
     {.key = "camera.name", .type = CONFIG_STRING, .count = 1,
      .offset = offsetof(Sim_Config, camera.name), .text_default = "camera",
      .help = "realsense2_camera camera_name; mounted on the URDF link <name>_link"},
-    {.key = "camera.color_offset_m", .type = CONFIG_F32, .count = 3,
+
+    {.key = "camera.color.enabled", .type = CONFIG_BOOL, .count = 1,
+     .offset = offsetof(Sim_Config, camera.color.enabled), .minimum = 0.0, .maximum = 1.0,
+     .defaults = {0.0}, .help = "simulate the colour stream (needs the window)"},
+    {.key = "camera.color.resolution", .type = CONFIG_U32, .count = 2,
+     .offset = offsetof(Sim_Config, camera.color.resolution), .minimum = 16.0, .maximum = 4096.0,
+     .defaults = {640.0, 480.0}, .help = "pixels, width and height"},
+    {.key = "camera.color.rate_hz", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, camera.color.rate), .minimum = 0.1, .maximum = 240.0,
+     .defaults = {30.0}, .help = "frames per second of sim time"},
+    {.key = "camera.color.horizontal_fov_deg", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, camera.color.horizontal_fov), .minimum = 1.0, .maximum = 170.0,
+     .defaults = {69.0}, .help = "pixels are square and centred"},
+    {.key = "camera.color.offset_m", .type = CONFIG_F32, .count = 3,
      .offset = offsetof(Sim_Config, camera.color_offset), .minimum = -1.0, .maximum = 1.0,
      .defaults = {0.0, 0.015, 0.0}, .help = "colour sensor from <name>_link (D4xx: 15 mm left)"},
-    {.key = "camera.resolution", .type = CONFIG_U32, .count = 2,
-     .offset = offsetof(Sim_Config, camera.resolution), .minimum = 16.0, .maximum = 4096.0,
-     .defaults = {640.0, 480.0}, .help = "pixels, width and height of both images"},
-    {.key = "camera.rate_hz", .type = CONFIG_F32, .count = 1,
-     .offset = offsetof(Sim_Config, camera.rate), .minimum = 0.1, .maximum = 240.0,
-     .defaults = {30.0}, .help = "frames per second of sim time"},
-    {.key = "camera.horizontal_fov_deg", .type = CONFIG_F32, .count = 1,
-     .offset = offsetof(Sim_Config, camera.horizontal_fov), .minimum = 1.0, .maximum = 170.0,
-     .defaults = {69.0}, .help = "colour; pixels are square and centred"},
-    {.key = "camera.depth_horizontal_fov_deg", .type = CONFIG_F32, .count = 1,
-     .offset = offsetof(Sim_Config, camera.depth_horizontal_fov), .minimum = 1.0, .maximum = 170.0,
-     .defaults = {87.0}, .help = "depth; pixels are square and centred"},
-    {.key = "camera.depth_range_m", .type = CONFIG_F32, .count = 2,
-     .offset = offsetof(Sim_Config, camera.depth_range), .minimum = 0.01, .maximum = 65.0,
-     .defaults = {0.1, 10.0}, .help = "nearest and farthest depth; outside it a pixel is 0"},
-    {.key = "camera.color_topic", .type = CONFIG_STRING, .count = 1,
-     .offset = offsetof(Sim_Config, camera.color_topic),
+    {.key = "camera.color.topic", .type = CONFIG_STRING, .count = 1,
+     .offset = offsetof(Sim_Config, camera.color.topic),
      .text_default = "/camera/camera/color/image_raw",
      .help = "rgb8 Image; its CameraInfo goes to the sibling camera_info"},
-    {.key = "camera.depth_topic", .type = CONFIG_STRING, .count = 1,
-     .offset = offsetof(Sim_Config, camera.depth_topic),
+
+    {.key = "camera.depth.enabled", .type = CONFIG_BOOL, .count = 1,
+     .offset = offsetof(Sim_Config, camera.depth.enabled), .minimum = 0.0, .maximum = 1.0,
+     .defaults = {0.0}, .help = "simulate the depth stream (needs the window)"},
+    {.key = "camera.depth.resolution", .type = CONFIG_U32, .count = 2,
+     .offset = offsetof(Sim_Config, camera.depth.resolution), .minimum = 16.0, .maximum = 4096.0,
+     .defaults = {640.0, 480.0}, .help = "pixels, width and height"},
+    {.key = "camera.depth.rate_hz", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, camera.depth.rate), .minimum = 0.1, .maximum = 240.0,
+     .defaults = {30.0}, .help = "frames per second of sim time"},
+    {.key = "camera.depth.horizontal_fov_deg", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, camera.depth.horizontal_fov), .minimum = 1.0, .maximum = 170.0,
+     .defaults = {87.0}, .help = "pixels are square and centred"},
+    {.key = "camera.depth.range_m", .type = CONFIG_F32, .count = 2,
+     .offset = offsetof(Sim_Config, camera.depth_range), .minimum = 0.01, .maximum = 65.0,
+     .defaults = {0.1, 10.0}, .help = "nearest and farthest; outside it a pixel is 0 (no data)"},
+    {.key = "camera.depth.topic", .type = CONFIG_STRING, .count = 1,
+     .offset = offsetof(Sim_Config, camera.depth.topic),
      .text_default = "/camera/camera/depth/image_rect_raw",
      .help = "16UC1 Image in mm; its CameraInfo goes to the sibling camera_info"},
 
@@ -329,7 +340,7 @@ bool validate_config(const Sim_Config *config, char *error, u32 error_size)
     Ordered_Pair pairs[] = {
         {"lidar.vertical_fov_deg", config->lidar.vertical_fov},
         {"lidar.range_m", config->lidar.range},
-        {"camera.depth_range_m", config->camera.depth_range},
+        {"camera.depth.range_m", config->camera.depth_range},
     };
     for (u32 i = 0; i < ARRAY_COUNT(pairs); i++) {
         if (!(pairs[i].values[0] < pairs[i].values[1])) {
@@ -387,18 +398,31 @@ u32 format_config(const Sim_Config *config, char *buffer, u32 buffer_size)
 {
     Text_Output out = {.buffer = buffer, .size = buffer_size, .length = 0};
     char line[2 * CONFIG_STRING_SIZE + 64]; // room for a fully escaped string
-    char section[64] = "";
+    const char *previous = ""; // the last key, to see which section headers change
     append_text(&out, "# Effective Regolith settings. Use with --config, or with ROS 2 as\n"
                       "# --ros-args --params-file. Generated by regolith --dump-config.\n"
                       "regolith:\n  ros__parameters:\n");
     for (u32 i = 0; i < config_field_count; i++) {
         const Config_Field *field = &config_fields[i];
-        const char *name = strchr(field->key, '.') + 1;
-        u32 section_length = (u32)(name - 1 - field->key);
-        if (strncmp(section, field->key, section_length) != 0 || section[section_length] != 0) {
-            snprintf(section, sizeof(section), "%.*s", (int)section_length, field->key);
-            append_text(&out, "    %s:\n", section);
+        // A header for each section level that differs from the previous key's: "camera:",
+        // then "  color:".
+        u32 depth = 0;
+        bool same = true;
+        const char *part = field->key;
+        const char *previous_part = previous;
+        for (const char *dot = strchr(part, '.'); dot; dot = strchr(part, '.')) {
+            u32 length = (u32)(dot - part);
+            same =
+                same && strncmp(part, previous_part, length) == 0 && previous_part[length] == '.';
+            if (!same) {
+                append_text(&out, "%*s%.*s:\n", (int)(4 + 2 * depth), "", (int)length, part);
+            }
+            previous_part = same ? previous_part + length + 1 : "";
+            part = dot + 1;
+            depth++;
         }
+        const char *name = part;
+        previous = field->key;
 
         if (field->type == CONFIG_STRING) {
             // Double-quoted, with " and \ escaped, as the config reader expects.
@@ -430,7 +454,8 @@ u32 format_config(const Sim_Config *config, char *buffer, u32 buffer_size)
             }
             snprintf(line + used, sizeof(line) - used, "%s", count > 1 ? "]" : "");
         }
-        append_text(&out, "      %-28s # %s\n", line, field->help);
+        append_text(&out, "%*s%-*s # %s\n", (int)(4 + 2 * depth), "", (int)(30 - 2 * depth), line,
+                    field->help);
     }
     return out.length;
 }
