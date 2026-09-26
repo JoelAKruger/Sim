@@ -6,12 +6,14 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 
 #include "core/sensors/camera_model.h"
 #include "core/sensors/lidar.h"
@@ -34,6 +36,7 @@ struct Ros_Bridge {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_publisher;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr color_info_publisher;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr depth_info_publisher;
+    rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr static_transform_publisher;
     sensor_msgs::msg::PointCloud2 cloud;
     sensor_msgs::msg::Image color_image;
     sensor_msgs::msg::Image depth_image;
@@ -356,6 +359,52 @@ static void publish_camera_frame(Camera_Frame_Header *frame)
     ros.depth_info_publisher->publish(ros.depth_info);
 }
 
+static void add_static_transform(tf2_msgs::msg::TFMessage *message, const char *parent,
+                                 const char *child, b3Transform transform)
+{
+    geometry_msgs::msg::TransformStamped stamped;
+    stamped.header.frame_id = parent;
+    stamped.child_frame_id = child;
+    stamped.transform.translation.x = transform.p.x;
+    stamped.transform.translation.y = transform.p.y;
+    stamped.transform.translation.z = transform.p.z;
+    stamped.transform.rotation.x = transform.q.v.x;
+    stamped.transform.rotation.y = transform.q.v.y;
+    stamped.transform.rotation.z = transform.q.v.z;
+    stamped.transform.rotation.w = transform.q.s;
+    message->transforms.push_back(stamped);
+}
+
+// The camera's own frames on /tf_static, as realsense2_camera publishes them (publish_tf):
+// <name>_link to the depth and colour frames, and each of those to its optical frame.
+// Latched, so late subscribers still get them. Nothing else goes on TF.
+static void publish_camera_transforms(const Camera_Config *camera)
+{
+    char link[CONFIG_STRING_SIZE + 32], depth[CONFIG_STRING_SIZE + 32];
+    char depth_optical[CONFIG_STRING_SIZE + 32], color[CONFIG_STRING_SIZE + 32];
+    char color_optical[CONFIG_STRING_SIZE + 32];
+    make_camera_frame_name(camera->name, "_link", link, sizeof(link));
+    make_camera_frame_name(camera->name, "_depth_frame", depth, sizeof(depth));
+    make_camera_frame_name(camera->name, "_depth_optical_frame", depth_optical,
+                           sizeof(depth_optical));
+    make_camera_frame_name(camera->name, "_color_frame", color, sizeof(color));
+    make_camera_frame_name(camera->name, "_color_optical_frame", color_optical,
+                           sizeof(color_optical));
+    const b3Transform identity = {{0.0f, 0.0f, 0.0f}, {{0.0f, 0.0f, 0.0f}, 1.0f}};
+    b3Transform color_offset = identity;
+    color_offset.p = v3{camera->color_offset[0], camera->color_offset[1], camera->color_offset[2]};
+    b3Transform optical = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
+
+    tf2_msgs::msg::TFMessage message;
+    add_static_transform(&message, link, depth, identity);
+    add_static_transform(&message, depth, depth_optical, optical);
+    add_static_transform(&message, link, color, color_offset);
+    add_static_transform(&message, color, color_optical, optical);
+    ros.static_transform_publisher = ros.node->create_publisher<tf2_msgs::msg::TFMessage>(
+        "/tf_static", rclcpp::QoS(1).reliable().transient_local());
+    ros.static_transform_publisher->publish(message);
+}
+
 // Publishers only for the sensors the config enables, on their drivers' topics. Reliable,
 // so best-effort subscribers (as sensor QoS asks) match too.
 static void create_sensor_publishers(const Sim_Config *config)
@@ -378,9 +427,14 @@ static void create_sensor_publishers(const Sim_Config *config)
         Camera_Intrinsics color = make_camera_intrinsics(width, height, camera->horizontal_fov);
         Camera_Intrinsics depth =
             make_camera_intrinsics(width, height, camera->depth_horizontal_fov);
-        const char *depth_frame = camera->depth_frame[0] ? camera->depth_frame : camera->frame;
-        init_camera_messages(&ros.color_image, &ros.color_info, &color, camera->frame, "rgb8", 3);
+        char color_frame[CONFIG_STRING_SIZE + 32], depth_frame[CONFIG_STRING_SIZE + 32];
+        make_camera_frame_name(camera->name, "_color_optical_frame", color_frame,
+                               sizeof(color_frame));
+        make_camera_frame_name(camera->name, "_depth_optical_frame", depth_frame,
+                               sizeof(depth_frame));
+        init_camera_messages(&ros.color_image, &ros.color_info, &color, color_frame, "rgb8", 3);
         init_camera_messages(&ros.depth_image, &ros.depth_info, &depth, depth_frame, "16UC1", 2);
+        publish_camera_transforms(camera);
         ros.color_publisher =
             node->create_publisher<sensor_msgs::msg::Image>(camera->color_topic, rclcpp::QoS(2));
         ros.depth_publisher =
@@ -455,6 +509,7 @@ void destroy_ros_bridge(void)
     ros.depth_publisher.reset();
     ros.color_info_publisher.reset();
     ros.depth_info_publisher.reset();
+    ros.static_transform_publisher.reset();
     ros.node.reset();
     rclcpp::shutdown();
 }

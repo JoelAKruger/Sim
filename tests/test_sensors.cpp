@@ -321,6 +321,19 @@ static void test_banksia(void)
 
 static void test_camera_model(void)
 {
+    // The optical frame looks along the body's x, with its x to the body's right (-y) and its
+    // y down (-z), as realsense2_camera's optical frames do.
+    b3Quat optical = get_optical_rotation();
+    v3 look = b3RotateVector(optical, v3{0.0f, 0.0f, 1.0f});
+    v3 right = b3RotateVector(optical, v3{1.0f, 0.0f, 0.0f});
+    v3 down = b3RotateVector(optical, v3{0.0f, 1.0f, 0.0f});
+    CHECK(b3Length(look - v3{1.0f, 0.0f, 0.0f}) < 1e-6f);
+    CHECK(b3Length(right - v3{0.0f, -1.0f, 0.0f}) < 1e-6f);
+    CHECK(b3Length(down - v3{0.0f, 0.0f, -1.0f}) < 1e-6f);
+    char name[64];
+    make_camera_frame_name("d415", "_color_optical_frame", name, sizeof(name));
+    CHECK(strcmp(name, "d415_color_optical_frame") == 0);
+
     Camera_Intrinsics camera = make_camera_intrinsics(640, 480, 69.0f);
     CHECK_NEAR(camera.fx, 465.6, 0.1);
     CHECK(camera.fx == camera.fy);

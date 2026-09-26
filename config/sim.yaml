@@ -53,13 +53,13 @@ regolith:
       gyro_bias_walk: 1e-05        # rad/s²/√Hz gyro bias random walk
       accel_bias_walk: 0.0001      # m/s³/√Hz accelerometer bias random walk
     camera:
-      enabled: false               # simulate the RGB-D camera (needs the window)
-      frame: "camera_color_optical_frame" # optical frame of the colour image (z forward, x right, y down)
-      depth_frame: ""              # optical frame of the depth image; empty for camera.frame
+      enabled: true               # simulate the RGB-D camera (needs the window)
+      name: "d415"                 # realsense2_camera camera_name; mounted on the URDF link <name>_link
+      color_offset_m: [0.0, 0.015, 0.0] # colour sensor from <name>_link (D4xx: 15 mm left)
       resolution: [640, 480]       # pixels, width and height of both images
       rate_hz: 30.0                # frames per second of sim time
-      horizontal_fov_deg: 69.0     # colour; pixels are square and centred
-      depth_horizontal_fov_deg: 87.0 # depth; pixels are square and centred
+      horizontal_fov_deg: 69.4     # colour; pixels are square and centred
+      depth_horizontal_fov_deg: 69.4 # depth; pixels are square and centred
       depth_range_m: [0.1, 10.0]   # nearest and farthest depth; outside it a pixel is 0
       color_topic: "/camera/camera/color/image_raw" # rgb8 Image; its CameraInfo goes to the sibling camera_info
       depth_topic: "/camera/camera/depth/image_rect_raw" # 16UC1 Image in mm; its CameraInfo goes to the sibling camera_info

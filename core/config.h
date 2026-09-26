@@ -39,10 +39,13 @@ struct Imu_Config {
 };
 
 // An RGB-D camera, published as realsense2_camera does. Generic: every parameter is here.
+// It sits on the URDF link <name>_link (x forward, z up), as the RealSense description
+// names it. The driver's optical frames hang off that link: depth at its origin, colour at
+// color_offset, both turned to z forward, x right, y down.
 struct Camera_Config {
     bool enabled;
-    char frame[CONFIG_STRING_SIZE]; // optical frame (z forward, x right, y down) of the colour
-    char depth_frame[CONFIG_STRING_SIZE]; // optical frame of the depth; empty for frame
+    char name[CONFIG_STRING_SIZE]; // the driver's camera_name: frames are <name>_link, etc.
+    f32 color_offset[3]; // m, the colour sensor from <name>_link, in that link's axes
     u32 resolution[2]; // pixels, width and height, for both images
     f32 rate; // frames per second
     f32 horizontal_fov; // degrees, colour

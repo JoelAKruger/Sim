@@ -1,11 +1,28 @@
 #pragma once
 
 #include <math.h>
+#include <stdio.h>
 
 #include "core/common.h"
 
 // The pinhole model and image formats of the simulated RGB-D camera, apart from the GL
 // code that renders it, so they can be tested without a window.
+
+// The rotation from a body frame (x forward, y left, z up) to an optical frame (z forward,
+// x right, y down): roll -90°, then yaw -90°, as realsense2_camera builds it.
+inline b3Quat get_optical_rotation(void) { return b3Quat{{-0.5f, 0.5f, -0.5f}, 0.5f}; }
+
+// An optical frame in the camera's <name>_link, from the sensor's offset in that link.
+inline b3Transform get_optical_transform(v3 offset)
+{
+    return b3Transform{offset, get_optical_rotation()};
+}
+
+// The driver's frame names: <name><suffix>, e.g. "d415" and "_color_optical_frame".
+inline void make_camera_frame_name(const char *name, const char *suffix, char *out, u32 size)
+{
+    snprintf(out, size, "%s%s", name, suffix);
+}
 
 // OpenCV/ROS convention: pixel centres are at whole numbers, so the centre of a w-wide
 // image is at (w - 1) / 2. Pixels are square.

@@ -40,13 +40,14 @@ bool create_sensor_camera(Sensor_Camera *camera, const Camera_Config *config, co
 {
     *camera = {};
     camera->config = config;
-    const char *depth_frame = config->depth_frame[0] ? config->depth_frame : config->frame;
-    if (!find_sensor_mount(&world->robot, config->frame, "camera.frame", &camera->color_mount,
-                           error, error_size) ||
-        !find_sensor_mount(&world->robot, depth_frame, "camera.depth_frame", &camera->depth_mount,
-                           error, error_size)) {
+    char link[CONFIG_STRING_SIZE + 16];
+    make_camera_frame_name(config->name, "_link", link, sizeof(link));
+    if (!find_sensor_mount(&world->robot, link, "camera.name", &camera->mount, error, error_size)) {
         return false;
     }
+    const f32 *offset = config->color_offset;
+    camera->color_in_link = get_optical_transform(v3{offset[0], offset[1], offset[2]});
+    camera->depth_in_link = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
     u32 width = config->resolution[0];
     u32 height = config->resolution[1];
     camera->color = make_camera_intrinsics(width, height, config->horizontal_fov);
@@ -123,13 +124,15 @@ void render_sensor_camera(Sensor_Camera *camera, const Viewer *viewer, const Wor
         camera->next_frame++; // a slow renderer skips frames rather than falling behind
     }
 
+    b3Transform link_pose = get_sensor_pose(&world->robot, &camera->mount);
+
     // Colour: the lit scene, as the viewer draws it.
     Material color_material = viewer->material;
     BeginTextureMode(camera->color_target);
     ClearBackground(BLACK);
     rlSetClipPlanes(VIEWER_NEAR, VIEWER_FAR);
     BeginMode3D(
-        make_optical_camera(get_sensor_pose(&world->robot, &camera->color_mount), &camera->color));
+        make_optical_camera(b3MulTransforms(link_pose, camera->color_in_link), &camera->color));
     draw_scene(viewer, world, 1.0f, &color_material, false);
     EndMode3D();
     EndTextureMode();
@@ -146,7 +149,7 @@ void render_sensor_camera(Sensor_Camera *camera, const Viewer *viewer, const Wor
     ClearBackground(BLANK); // no data
     rlSetClipPlanes(near_plane, far_plane);
     BeginMode3D(
-        make_optical_camera(get_sensor_pose(&world->robot, &camera->depth_mount), &camera->depth));
+        make_optical_camera(b3MulTransforms(link_pose, camera->depth_in_link), &camera->depth));
     BeginShaderMode(camera->depth_shader); // for anything drawn without a material
     draw_scene(viewer, world, 1.0f, &camera->depth_material, false);
     EndShaderMode();

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/sensors/camera_model.h"
 #include "core/stl.h"
 
 // Cells per terrain tile edge. 128 keeps each tile's vertex count below the 65536 that
@@ -758,7 +759,9 @@ static void draw_side_panel(Viewer *viewer, const World *world, const Frame_Stat
     y += ROW_HEIGHT;
     draw_sensor_row(ui, x, y, width, "IMU", world->has_imu, config->imu.frame, config->imu.rate);
     y += ROW_HEIGHT;
-    draw_sensor_row(ui, x, y, width, "Camera", viewer->camera_preview != NULL, config->camera.frame,
+    char camera_link[CONFIG_STRING_SIZE + 16];
+    make_camera_frame_name(config->camera.name, "_link", camera_link, sizeof(camera_link));
+    draw_sensor_row(ui, x, y, width, "Camera", viewer->camera_preview != NULL, camera_link,
                     config->camera.rate);
 }
 
@@ -812,11 +815,14 @@ static void draw_camera_card(Viewer *viewer, const World *world)
     DrawRectangleLinesEx(card, 1.0f, theme->border);
     f32 title_y = card.y + 0.5f * (title_height - get_ui_font_size(ui, UI_FONT_SMALL)) + 2.0f;
     draw_ui_text(ui, UI_FONT_SMALL, "CAMERA", card.x + 8.0f, title_y, theme->text);
+    char color_frame[CONFIG_STRING_SIZE + 32];
+    make_camera_frame_name(world->config.camera.name, "_color_optical_frame", color_frame,
+                           sizeof(color_frame));
     char fitted[128];
     f32 name_x = card.x + 8.0f + measure_ui_text(ui, UI_FONT_SMALL, "CAMERA") + 10.0f;
     draw_ui_text(ui, UI_FONT_SMALL,
-                 fit_ui_text(ui, UI_FONT_SMALL, world->config.camera.frame,
-                             card.x + card.width - 8.0f - name_x, fitted, sizeof(fitted)),
+                 fit_ui_text(ui, UI_FONT_SMALL, color_frame, card.x + card.width - 8.0f - name_x,
+                             fitted, sizeof(fitted)),
                  name_x, title_y, theme->text_dim);
     // Render targets are stored bottom-up.
     Rectangle source = {0.0f, 0.0f, (f32)texture->width, -(f32)texture->height};

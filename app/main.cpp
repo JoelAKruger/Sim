@@ -336,8 +336,8 @@ int main(int argc, char **argv)
             return 1;
         }
         viewer.camera_preview = &sensor_camera.color_target.texture;
-        log_info("camera on %s: %ux%u at %.0f Hz", config.camera.frame, config.camera.resolution[0],
-                 config.camera.resolution[1], (f64)config.camera.rate);
+        log_info("camera %s on %s_link: %ux%u at %.0f Hz", config.camera.name, config.camera.name,
+                 config.camera.resolution[0], config.camera.resolution[1], (f64)config.camera.rate);
     }
     if (!start_can_thread(&shared, &config, &world.robot, &world.actuators) ||
         !start_ros_thread(&shared, &config)) {

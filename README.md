@@ -147,10 +147,11 @@ cansend can0 095#02          # LED strip: green
 ## Sensors
 
 Three sensors, published the way the rover's own drivers publish them. Each one is off
-until the config turns it on, and each sits on a URDF link named by its `frame` setting.
-The link's name is also the messages' frame_id, so `robot_state_publisher`'s TF
-matches. A frame that isn't in the URDF stops the sim at startup, with the setting's
-name in the error.
+until the config turns it on, and each sits on a URDF link:
+- **LiDAR and IMU:** the link named by `frame`, which is also their messages' frame_id.
+- **Camera:** `<name>_link`, as the RealSense description names it.
+
+If the link isn't in the URDF, the sim stops at startup and names the setting.
 
 ```yaml
 lidar:
@@ -159,7 +160,7 @@ imu:
   enabled: true        # the Mid-360's own IMU, also on livox_frame
 camera:
   enabled: true
-  frame: "camera_color_optical_frame"
+  name: "d415"         # realsense2_camera camera_name: mounted on d415_link
 ```
 
 - **LiDAR** (Livox Mid-360): `sensor_msgs/PointCloud2` on `/livox/lidar`, in
@@ -191,8 +192,16 @@ camera:
   **Settings:** the resolution, the rate, both fields of view and the depth range are all
   settings.
 
-  **Frames:** `frame` must be an optical frame (z forward, x right, y down). The depth
-  image uses `depth_frame`, or the colour frame if that is empty.
+  **Frames:** the sim works like `realsense2_camera`.
+  - **Mount:** the camera sits on `<name>_link` (x forward, z up).
+  - **Optical frames:** depth is at the link's origin and colour at `color_offset_m` (15 mm
+    to the left on a D4xx), each turned to z forward, x right, y down.
+  - **Stamps:** the images carry `<name>_color_optical_frame` and
+    `<name>_depth_optical_frame`.
+  - **TF:** the driver's four static transforms go on `/tf_static`: `<name>_link` →
+    `<name>_depth_frame` → `<name>_depth_optical_frame`, and likewise for colour.
+
+  Nothing else goes on TF.
 
   **Window:** the camera renders with the window's GL context, so it is off in
   `--headless`.

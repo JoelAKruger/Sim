@@ -13,6 +13,8 @@
   <depend>rosgraph_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_msgs</depend>
 
   <!-- launch/sim.launch.py -->
   <exec_depend>launch_ros</exec_depend>

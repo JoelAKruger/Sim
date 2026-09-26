@@ -8,12 +8,14 @@
 //
 // Colour is the lit scene. Depth is the same scene drawn with a shader that writes
 // millimetres along the optical axis into two bytes of each pixel, so it comes back exact.
-// Each image looks along +z of its optical frame (x right, y down). It needs the GL context
-// the viewer opened.
+// The camera is mounted on the URDF link <name>_link (x forward, z up), and each image
+// looks along +z of its optical frame (x right, y down), derived from that link as
+// realsense2_camera does. It needs the GL context the viewer opened.
 struct Sensor_Camera {
     const Camera_Config *config;
-    Sensor_Mount color_mount;
-    Sensor_Mount depth_mount;
+    Sensor_Mount mount; // <name>_link
+    b3Transform color_in_link; // the colour optical frame in <name>_link
+    b3Transform depth_in_link; // the depth optical frame (at the link's origin)
     Camera_Intrinsics color;
     Camera_Intrinsics depth;
     RenderTexture2D color_target;
