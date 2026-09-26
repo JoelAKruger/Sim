@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/config.h"
 #include "core/robot.h"
 
 // Where a sensor sits: on a URDF link, which rides on one of the robot's bodies.
@@ -15,3 +16,7 @@ bool find_sensor_mount(const Robot *robot, const char *frame, const char *key, S
 
 // The sensor frame in the world after the last step.
 b3Transform get_sensor_pose(const Robot *robot, const Sensor_Mount *mount);
+
+// Turns off, with a warning, each enabled sensor whose frame the robot has no link for, so
+// settings written for one robot still run another.
+void disable_unmounted_sensors(Sim_Config *config, const Robot *robot);

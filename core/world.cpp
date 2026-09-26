@@ -201,6 +201,7 @@ bool load_robot(World *world, const char *xml, u64 xml_size, const char *resourc
         destroy_robot(&world->robot);
         return false;
     }
+    disable_unmounted_sensors(&world->config, &world->robot);
     const Sim_Config *config = &world->config;
     world->has_imu = config->imu.enabled;
     world->has_lidar = config->lidar.enabled;

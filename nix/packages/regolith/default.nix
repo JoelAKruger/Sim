@@ -77,6 +77,7 @@ mkPackage ({
       (root + "/tests")
       (root + "/tools")
       (root + "/config")
+      (root + "/robots")
       (root + "/.clang-tidy")
       (root + "/.clang-format")
     ] ++ map lib.fileset.maybeMissing [

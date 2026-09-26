@@ -6,6 +6,22 @@ in well under a second.
 
 ## Build and run
 
+```sh
+nix run github:JoelAKruger/Sim      # or `nix run` in a checkout
+```
+
+This opens the viewer with Banksia (`robots/banksia.urdf`) and the bundled
+`config/sim.yaml`. Banksia's visual meshes point into a local rover_description checkout,
+so where they're missing the viewer draws its collision shapes. Arguments pass through (`nix run . -- --headless`). Giving `--urdf`
+replaces the robot. Giving `--config` replaces both the settings and the robot, which
+then comes from the config's `robot.urdf` or `/robot_description`. `.#without-ros` and
+`.#minimal` run the same way. The flake offers `ros.cachix.org` for the prebuilt ROS
+packages. Accept it when nix asks (or pass `--accept-flake-config`); otherwise ROS builds
+from source.
+
+The window uses the system's OpenGL driver. On NixOS that works directly. Elsewhere,
+run it through [nixGL](https://github.com/nix-community/nixGL).
+
 nixpkgs, nix-ros-overlay and Box3D are pinned in `flake.lock`. nixpkgs follows the
 overlay's own pin, so ROS packages come prebuilt from `ros.cachix.org`.
 `nix flake update` moves the pins forward.
@@ -137,7 +153,7 @@ BLCMD. Banksia has eight: wheels `flw`, `blw`, `brw`, `frw` are 1–4, and pivot
 
 ```sh
 sudo modprobe vcan && sudo ip link add dev can0 type vcan && sudo ip link set up can0
-./result/bin/regolith --urdf tests/fixtures/banksia.urdf &
+./result/bin/regolith --urdf robots/banksia.urdf &
 cansend can0 033#1000        # brw: 3.75 rad/s
 cansend can0 013#F000        # flw (reversed): 3.75 rad/s forwards
 cansend can0 084#51EF        # frp: 0.3 rad
@@ -151,7 +167,9 @@ until the config turns it on, and each sits on a URDF link:
 - **LiDAR and IMU:** the link named by `frame`, which is also their messages' frame_id.
 - **Camera:** `<name>_link`, as the RealSense description names it.
 
-If the link isn't in the URDF, the sim stops at startup and names the setting.
+If the robot has no such link, that sensor is turned off with a warning, so settings
+written for one robot still run another. A link inside a ball joint (which has no body of
+its own) stops the sim at startup, naming the setting.
 
 ```yaml
 lidar:

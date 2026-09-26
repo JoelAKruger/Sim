@@ -261,33 +261,32 @@ static u64 hash_lidar_frame(u32 seed, u32 threads)
     return hash;
 }
 
-// A sensor on a link that doesn't exist, or that has no body, is refused by name.
+// A sensor on a link the robot doesn't have is turned off; one on a link with no body (inside
+// a ball joint) is refused by name.
 static void test_bad_frames(void)
 {
-    struct Bad_Frame {
-        const char *frame;
-        const char *expected;
-    };
-    Bad_Frame bad[] = {
-        {"mast", "lidar.frame: the robot has no link named \"mast\""},
-        {"tl_ball_link_x", "lidar.frame: \"tl_ball_link_x\" is a dummy link"},
-    };
     u64 size = 0;
     char *xml = read_file(banksia_path, &size);
     CHECK(xml != NULL);
-    for (u32 i = 0; i < ARRAY_COUNT(bad) && xml; i++) {
+    for (u32 i = 0; i < 2 && xml; i++) {
         Sim_Config config = make_sensor_config();
-        config.imu.enabled = false;
-        snprintf(config.lidar.frame, sizeof(config.lidar.frame), "%s", bad[i].frame);
+        snprintf(config.imu.frame, sizeof(config.imu.frame), "gps");
+        snprintf(config.lidar.frame, sizeof(config.lidar.frame), "%s",
+                 i == 0 ? "mast" : "tl_ball_link_x");
+        snprintf(config.camera.name, sizeof(config.camera.name), "d415");
+        config.camera.color.enabled = true;
         Linear_Allocator allocator;
         static World world;
         CHECK(create_allocator(&allocator, 64 * MEGABYTE));
         CHECK(create_world(&world, &allocator, &config));
         char error[256];
-        CHECK(!load_robot(&world, xml, size, "", error, sizeof(error)));
-        if (strstr(error, bad[i].expected) == NULL) {
-            fprintf(stderr, "  got \"%s\", expected \"%s\"\n", error, bad[i].expected);
-            check_failures++;
+        bool loaded = load_robot(&world, xml, size, "", error, sizeof(error));
+        if (i == 0) {
+            CHECK(loaded && !world.has_lidar && !world.config.lidar.enabled);
+            CHECK(world.has_imu && world.config.imu.enabled);
+            CHECK(!is_camera_enabled(&world.config.camera));
+        } else {
+            CHECK(!loaded && strstr(error, "lidar.frame: \"tl_ball_link_x\" is a dummy link"));
         }
         finish_world(&world, &allocator);
     }

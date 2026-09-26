@@ -313,6 +313,8 @@ int main(int argc, char **argv)
         destroy_ros_bridge();
         return is_quit_requested(&shared) ? 0 : 1;
     }
+    // Loading turns off sensors the robot has no frame for; the camera and ROS follow that.
+    config = world.config;
 
     Viewer viewer;
     if (!args.headless && !create_viewer(&viewer, &world, &allocator)) {
