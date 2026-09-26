@@ -1,0 +1,67 @@
+# Regolith settings, all at their defaults; anything left out keeps its default.
+#   regolith --config config/sim.yaml
+#   ros2 run regolith regolith --ros-args --params-file config/sim.yaml
+# The schema (keys, ranges, defaults) lives in core/config.cpp; regenerate this
+# file from it with: regolith --dump-config
+regolith:
+  ros__parameters:
+    world:
+      gravity: [0.0, 0.0, -9.81]   # m/s², world frame, z up. Lunar: [0, 0, -1.62]
+      physics_hz: 240              # fixed physics steps per simulated second
+      substeps: 4                  # Box3D solver substeps per step
+      workers: 1                   # Box3D worker threads; 1 is single-threaded
+    terrain:
+      heightmap: ""                # PGM heightmap, north up; empty for procedural terrain
+      height_m: 10.0               # m spanned by the heightmap's full pixel range
+      size_m: [200.0, 200.0]       # m along x and y (procedural terrain)
+      spacing_m: 0.5               # m between height samples (a heightmap's pixel size)
+      relief_m: 3.0                # m, amplitude of the procedural hills
+      seed: 1                      # procedural terrain seed
+      craters: 60                  # number of craters, 1 to 15 m in radius
+      friction: 0.8                # Coulomb friction coefficient of the ground
+    robot:
+      urdf: ""                     # URDF file; empty to take /robot_description
+      spawn: [0.0, 0.0, 0.0]       # x, y (m) and yaw (rad), dropped onto the terrain
+      friction: 1.0                # Coulomb friction of every robot shape
+      motor_torque: 10000.0        # N·m (or N) every motor can apply; URDF effort limits are ignored
+      servo_speed: 2.0             # rad/s (or m/s) position-controlled joints (pivots) move at; 0 instant
+      command_timeout_ms: 0.0      # ms of sim time before an actuator command expires; 0 never
+    can:
+      interface: "can0"            # SocketCAN interface for the motor controllers and LEDs; empty for no CAN
+    teleop:
+      speed_mps: 0.6               # m/s at full keyboard drive; no wheel goes faster over the ground
+      turn_rate: 0.8               # rad/s turning on the spot; arcs are scaled to teleop.speed_mps
+    lidar:
+      enabled: true               # simulate the Livox Mid-360
+      frame: "livox_frame"         # URDF link the LiDAR is on (x forward, z up); also the frame_id
+      topic: "/livox/lidar"        # PointCloud2, livox_ros_driver2 xfer_format 0 layout
+      rate_hz: 10.0                # frames per second (the driver's publish_freq)
+      points_per_second: 200000.0  # rays per second, spread evenly through each frame
+      vertical_fov_deg: [-7.0, 52.0] # lowest and highest elevation; it sees all round
+      range_m: [0.1, 40.0]         # blind zone and maximum range; nothing is reported outside
+      range_noise_m: 0.02          # 1 sigma range error
+      reflectivity: 60.0           # intensity of a head-on hit; scaled by the incidence cosine
+      threads: 4                   # threads casting rays; the output is the same for any number
+    imu:
+      enabled: true               # simulate the Mid-360's IMU
+      frame: "livox_frame"         # URDF link the IMU is on; also the frame_id
+      topic: "/livox/imu"          # sensor_msgs/Imu, without orientation
+      rate_hz: 200.0               # samples per second; at most world.physics_hz
+      acceleration_in_g: true      # acceleration in g, as livox_ros_driver2 sends it; false for m/s²
+      gyro_noise: 6.6e-05          # rad/s/√Hz white noise (ICM-40609: 0.0038 °/s/√Hz)
+      accel_noise: 0.00098         # m/s²/√Hz white noise (ICM-40609: 100 µg/√Hz)
+      gyro_bias_walk: 1e-05        # rad/s²/√Hz gyro bias random walk
+      accel_bias_walk: 0.0001      # m/s³/√Hz accelerometer bias random walk
+    camera:
+      enabled: false               # simulate the RGB-D camera (needs the window)
+      frame: "camera_color_optical_frame" # optical frame of the colour image (z forward, x right, y down)
+      depth_frame: ""              # optical frame of the depth image; empty for camera.frame
+      resolution: [640, 480]       # pixels, width and height of both images
+      rate_hz: 30.0                # frames per second of sim time
+      horizontal_fov_deg: 69.0     # colour; pixels are square and centred
+      depth_horizontal_fov_deg: 87.0 # depth; pixels are square and centred
+      depth_range_m: [0.1, 10.0]   # nearest and farthest depth; outside it a pixel is 0
+      color_topic: "/camera/camera/color/image_raw" # rgb8 Image; its CameraInfo goes to the sibling camera_info
+      depth_topic: "/camera/camera/depth/image_rect_raw" # 16UC1 Image in mm; its CameraInfo goes to the sibling camera_info
+    sensors:
+      seed: 1                      # noise seed; the same seed gives the same readings

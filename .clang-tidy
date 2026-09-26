@@ -1,0 +1,14 @@
+# Naming rules for Regolith. Run: tools/check_naming.sh
+Checks: '-*,readability-identifier-naming'
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(core|render|ros|can|app|tests)/.*\.h$'
+CheckOptions:
+  readability-identifier-naming.FunctionCase: lower_case
+  readability-identifier-naming.FunctionIgnoredRegexp: '^main$'
+  readability-identifier-naming.StructCase: Camel_Snake_Case
+  readability-identifier-naming.EnumCase: Camel_Snake_Case
+  readability-identifier-naming.EnumConstantCase: UPPER_CASE
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.MemberCase: lower_case
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
