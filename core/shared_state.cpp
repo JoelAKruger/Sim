@@ -98,6 +98,16 @@ u64 get_sim_time(Shared_Global_State *shared)
     return __atomic_load_n(&shared->sim_time_ns, __ATOMIC_ACQUIRE);
 }
 
+void set_stamp_offset(Shared_Global_State *shared, u64 offset_ns)
+{
+    __atomic_store_n(&shared->stamp_offset_ns, offset_ns, __ATOMIC_RELEASE);
+}
+
+u64 get_stamp_offset(Shared_Global_State *shared)
+{
+    return __atomic_load_n(&shared->stamp_offset_ns, __ATOMIC_ACQUIRE);
+}
+
 void request_quit(Shared_Global_State *shared)
 {
     __atomic_store_n(&shared->quit, 1u, __ATOMIC_RELEASE);

@@ -27,6 +27,7 @@ struct Ros_Bridge {
     pthread_t thread;
     bool thread_started;
     u64 last_clock_ns;
+    u64 stamp_offset_ns; // this pass's: sim time plus this is the stamp
 
     // Sensors: a publisher for each enabled one, and its message, sized once.
     const Sim_Config *config;
@@ -50,10 +51,6 @@ bool create_ros_bridge(i32 argc, char **argv)
 {
     rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
     ros.node = rclcpp::Node::make_shared("regolith");
-    // Reliable, so it matches every /clock subscriber whatever QoS it asks for.
-    ros.clock_publisher =
-        ros.node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::QoS(10));
-    ros.last_clock_ns = UINT64_MAX;
     return true;
 }
 
@@ -182,6 +179,9 @@ void apply_ros_parameters(Sim_Config *config)
 
 static void publish_clock(void)
 {
+    if (!ros.clock_publisher) {
+        return;
+    }
     u64 now = get_sim_time(ros.shared);
     if (now == ros.last_clock_ns) {
         return;
@@ -233,8 +233,11 @@ char *wait_for_robot_description(Shared_Global_State *shared, u64 *size)
     return description;
 }
 
-static builtin_interfaces::msg::Time make_stamp(u64 ns)
+// A message stamp for a sim time: the sim time itself, or with ros.use_sim_time off, the
+// system time it corresponds to.
+static builtin_interfaces::msg::Time make_stamp(u64 sim_ns)
 {
+    u64 ns = sim_ns + ros.stamp_offset_ns;
     builtin_interfaces::msg::Time stamp;
     stamp.sec = (i32)(ns / NS_PER_S);
     stamp.nanosec = (u32)(ns % NS_PER_S);
@@ -286,7 +289,7 @@ static void publish_lidar_frame(Lidar_Frame_Header *frame)
     u8 *out = cloud->data.data();
     for (u32 i = 0; i < frame->count; i++, out += LIVOX_POINT_STEP) {
         const Lidar_Point *point = &points[i];
-        f64 timestamp = (f64)point->time_ns;
+        f64 timestamp = (f64)(point->time_ns + ros.stamp_offset_ns);
         memcpy(out + 0, &point->x, 4);
         memcpy(out + 4, &point->y, 4);
         memcpy(out + 8, &point->z, 4);
@@ -489,6 +492,7 @@ static void *run_ros_thread(void *)
     executor.add_node(ros.node);
     while (!is_quit_requested(ros.shared)) {
         executor.spin_once(std::chrono::milliseconds(1));
+        ros.stamp_offset_ns = get_stamp_offset(ros.shared);
         publish_clock();
         publish_sensors();
     }
@@ -500,6 +504,12 @@ bool start_ros_thread(Shared_Global_State *shared, const Sim_Config *config)
 {
     ros.shared = shared;
     ros.config = config;
+    if (config->use_sim_time) {
+        // Reliable, so it matches every /clock subscriber whatever QoS it asks for.
+        ros.clock_publisher =
+            ros.node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::QoS(10));
+        ros.last_clock_ns = UINT64_MAX;
+    }
     create_sensor_publishers(config);
     if (pthread_create(&ros.thread, NULL, run_ros_thread, NULL) != 0) {
         log_error("ros: could not start the ROS thread");

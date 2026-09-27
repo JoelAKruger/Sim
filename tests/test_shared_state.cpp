@@ -129,6 +129,9 @@ static void test_shared_scalars(void)
     CHECK(is_quit_requested(&shared));
     set_sim_time(&shared, 123456789ull);
     CHECK(get_sim_time(&shared) == 123456789ull);
+    CHECK(get_stamp_offset(&shared) == 0); // sim time until set
+    set_stamp_offset(&shared, 1790000000ull * NS_PER_S);
+    CHECK(get_stamp_offset(&shared) == 1790000000ull * NS_PER_S);
 }
 
 int main(void)

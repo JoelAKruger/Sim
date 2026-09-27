@@ -70,7 +70,12 @@ prints the effective settings, and with ROS 2, `ros2 param dump /regolith` shows
 | `--hash` | print the final state hash; identical inputs give identical hashes |
 | `--screenshot F` | save the final frame as a PNG (with `--steps`) |
 
-The sim publishes `/clock`, so run other nodes with `use_sim_time:=true`.
+By default (`ros.use_sim_time: true`) messages are stamped with sim time, which starts at
+zero, and the sim publishes `/clock`, so run other nodes with `use_sim_time:=true`. With
+`ros.use_sim_time: false` there is no `/clock`, and stamps are the system time, as a real
+driver's would be: other nodes run with their usual `use_sim_time:=false`. Pausing then
+leaves a gap in the stamps, and `--rtf` other than 1 makes them run faster or slower than
+the clock. The launch file sets `robot_state_publisher`'s `use_sim_time` to match.
 
 ## Robots
 

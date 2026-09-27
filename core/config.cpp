@@ -78,6 +78,11 @@ const Config_Field config_fields[] = {
      .offset = offsetof(Sim_Config, can_interface), .text_default = "can0",
      .help = "SocketCAN interface for the motor controllers and LEDs; empty for no CAN"},
 
+    {.key = "ros.use_sim_time", .type = CONFIG_BOOL, .count = 1,
+     .offset = offsetof(Sim_Config, use_sim_time), .minimum = 0.0, .maximum = 1.0,
+     .defaults = {1.0},
+     .help = "stamp messages with sim time from 0 and publish /clock; false for the system clock"},
+
     {.key = "teleop.speed_mps", .type = CONFIG_F32, .count = 1,
      .offset = offsetof(Sim_Config, teleop_speed), .minimum = 0.0, .maximum = 100.0,
      .defaults = {0.6}, .help = "m/s at full keyboard drive; no wheel goes faster over the ground"},

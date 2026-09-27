@@ -44,6 +44,7 @@ void *read_triple_buffer(Triple_Buffer *buffer); // consumer: newest unread fram
 // the functions below, which use atomics; each ring has one producer and one consumer.
 struct Shared_Global_State {
     u64 sim_time_ns;
+    u64 stamp_offset_ns; // added to sim time to stamp messages: 0 on sim time
     u32 quit;
     Ring_Buffer actuator_commands; // Actuator_Command: CAN thread to sim
     Triple_Buffer status_light; // Status_Light: CAN thread to sim, latest wins
@@ -59,5 +60,7 @@ bool create_shared_state(Shared_Global_State *shared, Linear_Allocator *allocato
 
 void set_sim_time(Shared_Global_State *shared, u64 sim_time_ns);
 u64 get_sim_time(Shared_Global_State *shared);
+void set_stamp_offset(Shared_Global_State *shared, u64 offset_ns);
+u64 get_stamp_offset(Shared_Global_State *shared);
 void request_quit(Shared_Global_State *shared);
 bool is_quit_requested(Shared_Global_State *shared);

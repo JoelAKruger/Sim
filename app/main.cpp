@@ -240,6 +240,17 @@ static void run_step(World *world, Shared_Global_State *shared, u64 *last_ignore
     set_sim_time(shared, get_sim_time_ns(world));
 }
 
+// With ros.use_sim_time off, messages are stamped with the system clock: sim time plus the
+// system time at sim zero. Pauses and lag only push the offset on, so stamps keep up with
+// the clock and never go backwards.
+static void update_stamp_offset(Shared_Global_State *shared, const World *world)
+{
+    u64 offset = get_system_time_ns() - get_sim_time_ns(world);
+    if (offset > get_stamp_offset(shared)) {
+        set_stamp_offset(shared, offset);
+    }
+}
+
 // Four 10 cm cubes (red, white, green and blue) scattered 1.5 to 5 m from the spawn point,
 // at least 0.5 m apart. The layout comes from terrain.seed, so it is the same every run and
 // changes with the terrain.
@@ -349,6 +360,14 @@ int main(int argc, char **argv)
                      depth->resolution[1], (f64)depth->rate);
         }
     }
+    if (!config.use_sim_time) {
+        update_stamp_offset(&shared, &world);
+        if (args.realtime_factor != 1.0) {
+            log_warning("ros.use_sim_time is off, so at --rtf %g message stamps drift from the "
+                        "system clock",
+                        args.realtime_factor);
+        }
+    }
     if (!start_can_thread(&shared, &config, &world.robot, &world.actuators) ||
         !start_ros_thread(&shared, &config)) {
         request_quit(&shared);
@@ -408,6 +427,9 @@ int main(int argc, char **argv)
                 request_quit(&shared);
                 break;
             }
+        }
+        if (!config.use_sim_time) {
+            update_stamp_offset(&shared, &world);
         }
         update_pace_stats(&pace, get_time_ns(), get_sim_time_ns(&world));
         pace.frame.paused = paused;

@@ -93,6 +93,8 @@ struct Sim_Config {
 
     char can_interface[CONFIG_STRING_SIZE]; // SocketCAN interface; empty for no CAN
 
+    bool use_sim_time; // stamp with sim time and publish /clock; false for the system clock
+
     f32 teleop_speed; // m/s at full keyboard drive
     f32 teleop_turn_rate; // rad/s at full keyboard turn
 

@@ -43,6 +43,8 @@ inline f64 absolute(f64 x) { return x < 0.0 ? -x : x; }
 
 // CLOCK_MONOTONIC in nanoseconds. Wall time for pacing only; the simulation never reads it.
 u64 get_time_ns(void);
+// CLOCK_REALTIME in nanoseconds since the Unix epoch: ROS's system time.
+u64 get_system_time_ns(void);
 void sleep_ns(u64 ns);
 
 // printf-style logging to stderr, prefixed with the level.

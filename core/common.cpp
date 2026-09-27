@@ -14,6 +14,13 @@ u64 get_time_ns(void)
     return (u64)now.tv_sec * NS_PER_S + (u64)now.tv_nsec;
 }
 
+u64 get_system_time_ns(void)
+{
+    timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (u64)now.tv_sec * NS_PER_S + (u64)now.tv_nsec;
+}
+
 void sleep_ns(u64 ns)
 {
     timespec duration = {.tv_sec = (time_t)(ns / NS_PER_S), .tv_nsec = (long)(ns % NS_PER_S)};

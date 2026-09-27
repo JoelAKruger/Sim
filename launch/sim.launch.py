@@ -4,18 +4,29 @@
     ros2 launch regolith sim.launch.py description:=... headless:=true config:=my.yaml
 
 robot_state_publisher publishes the expanded URDF on /robot_description (latched), and
-the sim builds the robot from it once, at startup. Everything runs on sim time from
-Regolith's /clock.
+the sim builds the robot from it once, at startup. With ros.use_sim_time (the default),
+everything runs on sim time from Regolith's /clock; without it, on the system clock.
 """
 
 import os
 
 import xacro
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _uses_sim_time(config):
+    """ros.use_sim_time from the settings file, which defaults to true."""
+    if not config:
+        return True
+    with open(os.path.expanduser(config)) as file:
+        settings = yaml.safe_load(file) or {}
+    settings = settings.get("regolith", {}).get("ros__parameters", settings)
+    return bool(settings.get("ros", {}).get("use_sim_time", True))
 
 
 def _nodes(context):
@@ -30,7 +41,7 @@ def _nodes(context):
         nodes.append(Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",
-            parameters=[{"robot_description": urdf, "use_sim_time": True}],
+            parameters=[{"robot_description": urdf, "use_sim_time": _uses_sim_time(config)}],
             output="screen",
         ))
     nodes.append(Node(

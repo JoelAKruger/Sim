@@ -21,9 +21,9 @@ void apply_ros_parameters(Sim_Config *config);
 // or NULL. Later descriptions are ignored: the robot is loaded once.
 char *wait_for_robot_description(Shared_Global_State *shared, u64 *size);
 
-// Starts the ROS thread, which publishes /clock and the enabled sensors (the IMU, the
-// LiDAR and the camera, as their real drivers do) from the shared state until quit is
-// requested. config must outlive the thread.
+// Starts the ROS thread, which publishes the enabled sensors (the IMU, the LiDAR and the
+// camera, as their real drivers do), and /clock with ros.use_sim_time, from the shared
+// state until quit is requested. config must outlive the thread.
 bool start_ros_thread(Shared_Global_State *shared, const Sim_Config *config);
 
 // Joins the ROS thread and shuts rclcpp down.
