@@ -4,8 +4,8 @@
     ros2 launch regolith sim.launch.py description:=... headless:=true config:=my.yaml
 
 robot_state_publisher publishes the expanded URDF on /robot_description (latched), and
-the sim builds the robot from it once, at startup. With ros.use_sim_time (the default),
-everything runs on sim time from Regolith's /clock; without it, on the system clock.
+the sim builds the robot from it once, at startup. Everything runs on the system clock,
+or with ros.use_sim_time, on sim time from Regolith's /clock.
 """
 
 import os
@@ -20,13 +20,13 @@ from launch_ros.actions import Node
 
 
 def _uses_sim_time(config):
-    """ros.use_sim_time from the settings file, which defaults to true."""
+    """ros.use_sim_time from the settings file, which defaults to false."""
     if not config:
-        return True
+        return False
     with open(os.path.expanduser(config)) as file:
         settings = yaml.safe_load(file) or {}
     settings = settings.get("regolith", {}).get("ros__parameters", settings)
-    return bool(settings.get("ros", {}).get("use_sim_time", True))
+    return bool(settings.get("ros", {}).get("use_sim_time", False))
 
 
 def _nodes(context):

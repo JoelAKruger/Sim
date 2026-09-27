@@ -145,13 +145,13 @@ static void test_load_text(void)
     CHECK(config.physics_hz == 500);
     CHECK(config.gravity.z == -1.62f);
     CHECK(config.terrain_relief == 1.0f);
-    CHECK(config.use_sim_time); // the default; ROS's own use_sim_time is a different setting
+    CHECK(!config.use_sim_time); // the default; ROS's own use_sim_time is a different setting
     CHECK(unknown == 1);
 
     const char *flags = "lidar:\n  enabled: true\nimu:\n  acceleration_in_g: False\n"
-                        "ros:\n  use_sim_time: false\n";
+                        "ros:\n  use_sim_time: true\n";
     CHECK(load_config_text(&config, flags, "flags", &unknown, error, sizeof(error)));
-    CHECK(config.lidar.enabled && !config.imu.acceleration_in_g && !config.use_sim_time);
+    CHECK(config.lidar.enabled && !config.imu.acceleration_in_g && config.use_sim_time);
 
     const char *plain_file = "world:\n  substeps: 8\n";
     CHECK(load_config_text(&config, plain_file, "plain", &unknown, error, sizeof(error)));

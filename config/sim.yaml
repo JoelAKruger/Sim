@@ -31,7 +31,7 @@ regolith:
     can:
       interface: "can0"            # SocketCAN interface for the motor controllers and LEDs; empty for no CAN
     ros:
-      use_sim_time: true           # stamp messages with sim time from 0 and publish /clock; false for the system clock
+      use_sim_time: false           # stamp messages with sim time from 0 and publish /clock; false for the system clock
     teleop:
       speed_mps: 0.6               # m/s at full keyboard drive; no wheel goes faster over the ground
       turn_rate: 0.8               # rad/s turning on the spot; arcs are scaled to teleop.speed_mps
