@@ -30,12 +30,12 @@ const char *get_blcmd_function_name(u32 function)
 bool is_blcmd_frame(const Can_Frame *frame)
 {
     u32 node = get_frame_node(frame);
-    return frame->id <= 0xff && node >= BLCMD_FIRST_NODE && node <= BLCMD_LAST_NODE;
+    return frame->id <= 0xff && is_blcmd_node(node);
 }
 
 bool make_blcmd_node(const Robot *robot, const Robot_Actuator *actuator, Blcmd_Node *node)
 {
-    if (actuator->node_id < BLCMD_FIRST_NODE || actuator->node_id > BLCMD_LAST_NODE) {
+    if (!is_blcmd_node(actuator->node_id)) {
         return false;
     }
     const Urdf_Joint *urdf = &robot->model.joints[robot->joints[actuator->joint].urdf_joint];

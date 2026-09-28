@@ -23,8 +23,9 @@ struct Terrain {
 // origin is kept free of craters.
 bool generate_terrain(Terrain *terrain, Linear_Allocator *allocator, const Sim_Config *config);
 
-// Height at world (x, y), interpolated over the same two triangles per cell that Box3D
-// collides with, so it agrees with physics exactly. Clamped to the grid edges.
+// Height at world (x, y), interpolated over the two triangles per cell that the physics
+// collides with (split along the south-west to north-east diagonal), so it agrees with
+// physics exactly. Clamped to the grid edges. Works on any grid, the soil's too.
 f32 get_terrain_height(const Terrain *terrain, f32 x, f32 y);
 
 // A binary PGM (P5), north up, one sample per pixel, spaced terrain.spacing_m apart and

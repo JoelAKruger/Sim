@@ -165,12 +165,12 @@ static void copy_name(char *destination, const char *source)
     snprintf(destination, URDF_NAME_SIZE, "%s", source ? source : "");
 }
 
-b3Quat make_quat_from_rpy(f64 roll, f64 pitch, f64 yaw)
+Quat make_quat_from_rpy(f64 roll, f64 pitch, f64 yaw)
 {
     f64 cr = cos(roll * 0.5), sr = sin(roll * 0.5);
     f64 cp = cos(pitch * 0.5), sp = sin(pitch * 0.5);
     f64 cy = cos(yaw * 0.5), sy = sin(yaw * 0.5);
-    b3Quat q;
+    Quat q;
     q.s = (f32)(cr * cp * cy + sr * sp * sy);
     q.v.x = (f32)(sr * cp * cy - cr * sp * sy);
     q.v.y = (f32)(cr * sp * cy + sr * cp * sy);
@@ -178,9 +178,9 @@ b3Quat make_quat_from_rpy(f64 roll, f64 pitch, f64 yaw)
     return q;
 }
 
-static b3Transform parse_origin(Urdf_Parser *p, const XML_Char **attributes)
+static Pose parse_origin(Urdf_Parser *p, const XML_Char **attributes)
 {
-    b3Transform origin = {};
+    Pose origin = {};
     origin.p = get_attribute_vector(p, attributes, "xyz", v3{0.0f, 0.0f, 0.0f});
     const char *rpy_text = get_attribute(attributes, "rpy");
     f64 rpy[3] = {0.0, 0.0, 0.0};
@@ -233,7 +233,7 @@ static void start_shape(Urdf_Parser *p, bool visual)
     }
     *shape = {};
     shape->link = p->links - 1;
-    shape->origin.q = b3Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
+    shape->origin.q = Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
     shape->color[0] = -1.0f; // unresolved until the end
     if (visual) {
         p->visuals++;
@@ -275,7 +275,7 @@ static void start_joint(Urdf_Parser *p, const XML_Char **attributes)
     *joint = {};
     *get_current_joint_names(p) = {};
     copy_name(joint->name, get_attribute(attributes, "name"));
-    joint->origin.q = b3Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
+    joint->origin.q = Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
     joint->axis = v3{1.0f, 0.0f, 0.0f};
     joint->control = -1;
     const char *type = get_attribute(attributes, "type");
@@ -308,11 +308,11 @@ static void start_joint_child(Urdf_Parser *p, const char *name, const XML_Char *
         copy_name(names->child, get_attribute(attributes, "link"));
     } else if (strcmp(name, "axis") == 0) {
         v3 axis = get_attribute_vector(p, attributes, "xyz", v3{1.0f, 0.0f, 0.0f});
-        if (b3Length(axis) < 1e-6f) {
+        if (get_length(axis) < 1e-6f) {
             fail_parse(p, "joint \"%s\" has a zero axis", joint->name);
             return;
         }
-        joint->axis = b3Normalize(axis);
+        joint->axis = normalize(axis);
     } else if (strcmp(name, "limit") == 0) {
         joint->has_limits = true;
         joint->lower = get_attribute_number(p, attributes, "lower", 0.0f);
@@ -404,7 +404,7 @@ static void handle_start_element(void *context, const XML_Char *name, const XML_
             Urdf_Link *link = get_current_link(p);
             *link = {};
             copy_name(link->name, get_attribute(attributes, "name"));
-            link->inertial.origin.q = b3Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
+            link->inertial.origin.q = Quat{{0.0f, 0.0f, 0.0f}, 1.0f};
             link->parent_joint = -1;
             link->first_visual = p->visuals;
             link->first_collision = p->collisions;

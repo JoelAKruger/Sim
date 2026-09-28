@@ -28,9 +28,9 @@ static v3 get_gaussian_v3(Random *random, f32 sigma)
 void update_imu(Imu_Sensor *imu, const Robot *robot, v3 gravity, f32 step_seconds, u64 sim_time_ns)
 {
     const Imu_Config *config = imu->config;
-    b3BodyId body = robot->bodies[imu->mount.body].id;
-    b3Transform pose = get_sensor_pose(robot, &imu->mount);
-    v3 velocity = b3Body_GetWorldPointVelocity(body, pose.p);
+    u32 body = robot->bodies[imu->mount.body].physics_body;
+    Pose pose = get_sensor_pose(robot, &imu->mount);
+    v3 velocity = get_point_velocity(robot->physics, body, pose.p);
     bool had_previous = imu->has_previous;
     v3 acceleration = (1.0f / step_seconds) * (velocity - imu->previous_velocity);
     imu->previous_velocity = velocity;
@@ -57,9 +57,10 @@ void update_imu(Imu_Sensor *imu, const Robot *robot, v3 gravity, f32 step_second
     Imu_Sample sample;
     sample.stamp_ns = sim_time_ns;
     sample.angular_velocity =
-        b3InvRotateVector(pose.q, b3Body_GetAngularVelocity(body)) + imu->gyro_bias + gyro_noise;
+        inverse_rotate_vector(pose.q, get_body_angular_velocity(robot->physics, body)) +
+        imu->gyro_bias + gyro_noise;
     sample.linear_acceleration =
-        b3InvRotateVector(pose.q, acceleration - gravity) + imu->accel_bias + accel_noise;
+        inverse_rotate_vector(pose.q, acceleration - gravity) + imu->accel_bias + accel_noise;
     if (config->acceleration_in_g) {
         sample.linear_acceleration = (1.0f / STANDARD_GRAVITY) * sample.linear_acceleration;
     }

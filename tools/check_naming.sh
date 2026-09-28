@@ -21,7 +21,18 @@ if [[ ${#sources[@]} -eq 0 ]]; then
     exit 1
 fi
 
-if clang-tidy --quiet -p "$build" "${sources[@]}" 2>/dev/null; then
+# Chrono's headers include OpenMP's omp.h, which comes with GCC, not clang. Lend clang-tidy
+# that one header (the rest of GCC's include directory would clash with clang's own).
+extra=()
+omp=$(g++ -print-file-name=include/omp.h 2>/dev/null || true)
+if [[ -f $omp ]]; then
+    omp_dir=$(mktemp -d)
+    trap 'rm -rf "$omp_dir"' EXIT
+    ln -s "$omp" "$omp_dir/omp.h"
+    extra=(--extra-arg="-isystem$omp_dir")
+fi
+
+if clang-tidy --quiet -p "$build" "${extra[@]}" "${sources[@]}" 2>/dev/null; then
     echo "naming: ok (${#sources[@]} files)"
 else
     echo "naming: violations above" >&2

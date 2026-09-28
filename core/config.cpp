@@ -19,10 +19,13 @@ const Config_Field config_fields[] = {
      .defaults = {240.0}, .help = "fixed physics steps per simulated second"},
     {.key = "world.substeps", .type = CONFIG_U32, .count = 1,
      .offset = offsetof(Sim_Config, substeps), .minimum = 1.0, .maximum = 64.0,
-     .defaults = {4.0}, .help = "Box3D solver substeps per step"},
+     .defaults = {4.0}, .help = "Chrono steps per physics step"},
+    {.key = "world.solver_iterations", .type = CONFIG_U32, .count = 1,
+     .offset = offsetof(Sim_Config, solver_iterations), .minimum = 1.0, .maximum = 10000.0,
+     .defaults = {100.0}, .help = "most solver iterations per Chrono step"},
     {.key = "world.workers", .type = CONFIG_U32, .count = 1,
      .offset = offsetof(Sim_Config, workers), .minimum = 1.0, .maximum = 64.0,
-     .defaults = {1.0}, .help = "Box3D worker threads; 1 is single-threaded"},
+     .defaults = {1.0}, .help = "Chrono threads; 1 is single-threaded and repeatable"},
 
     {.key = "terrain.heightmap", .type = CONFIG_STRING, .count = 1,
      .offset = offsetof(Sim_Config, terrain_heightmap), .text_default = "",
@@ -54,6 +57,48 @@ const Config_Field config_fields[] = {
     {.key = "terrain.boulder_size_m", .type = CONFIG_F32, .count = 2,
      .offset = offsetof(Sim_Config, boulder_size), .minimum = 0.02, .maximum = 20.0,
      .defaults = {0.1, 1.2}, .help = "smallest and largest; most are small"},
+
+    {.key = "soil.enabled", .type = CONFIG_BOOL, .count = 1,
+     .offset = offsetof(Sim_Config, soil_enabled), .minimum = 0.0, .maximum = 1.0,
+     .defaults = {1.0},
+     .help = "a patch of deformable soil (Chrono SCM) around robot.spawn"},
+    {.key = "soil.size_m", .type = CONFIG_F32, .count = 2,
+     .offset = offsetof(Sim_Config, soil_size), .minimum = 0.1, .maximum = 1000.0,
+     .defaults = {20.0, 20.0}, .help = "m along x and y, rounded to whole terrain cells"},
+    {.key = "soil.spacing_m", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_spacing), .minimum = 0.005, .maximum = 10.0,
+     .defaults = {0.02}, .help = "m between soil samples, adjusted to divide terrain.spacing_m"},
+    {.key = "soil.bekker_kphi", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_bekker_kphi), .minimum = 0.0, .maximum = 1e12,
+     .defaults = {2e6}, .help = "Pa/m^n, Bekker frictional modulus"},
+    {.key = "soil.bekker_kc", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_bekker_kc), .minimum = -1e12, .maximum = 1e12,
+     .defaults = {0.0}, .help = "Pa/m^(n-1), Bekker cohesive modulus"},
+    {.key = "soil.bekker_n", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_bekker_n), .minimum = 0.1, .maximum = 3.0,
+     .defaults = {1.1}, .help = "Bekker sinkage exponent"},
+    {.key = "soil.cohesion_pa", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_cohesion), .minimum = 0.0, .maximum = 1e9,
+     .defaults = {0.0}, .help = "Pa, Mohr-Coulomb cohesion; dry sand has none"},
+    {.key = "soil.friction_deg", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_friction_angle), .minimum = 0.0, .maximum = 89.0,
+     .defaults = {30.0}, .help = "degrees, Mohr-Coulomb internal friction angle"},
+    {.key = "soil.janosi_m", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_janosi_shear), .minimum = 1e-6, .maximum = 10.0,
+     .defaults = {0.01}, .help = "m, Janosi-Hanamoto shear deformation modulus"},
+    {.key = "soil.elastic_stiffness", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_elastic_stiffness), .minimum = 0.0, .maximum = 1e13,
+     .defaults = {2e8}, .help = "Pa/m, stiffness before it yields; above bekker_kphi"},
+    {.key = "soil.damping", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_damping), .minimum = 0.0, .maximum = 1e12,
+     .defaults = {3e4}, .help = "Pa·s/m, vertical damping"},
+    {.key = "soil.bulldozing", .type = CONFIG_BOOL, .count = 1,
+     .offset = offsetof(Sim_Config, soil_bulldozing), .minimum = 0.0, .maximum = 1.0,
+     .defaults = {1.0},
+     .help = "displaced soil heaps up beside ruts and cuts"},
+    {.key = "soil.erosion_angle_deg", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, soil_erosion_angle), .minimum = 1.0, .maximum = 89.0,
+     .defaults = {40.0}, .help = "degrees; heaped soil steeper than this slides down"},
 
     {.key = "robot.urdf", .type = CONFIG_STRING, .count = 1,
      .offset = offsetof(Sim_Config, robot_urdf), .text_default = "",
@@ -89,6 +134,15 @@ const Config_Field config_fields[] = {
     {.key = "teleop.turn_rate", .type = CONFIG_F32, .count = 1,
      .offset = offsetof(Sim_Config, teleop_turn_rate), .minimum = 0.0, .maximum = 100.0,
      .defaults = {0.8}, .help = "rad/s turning on the spot; arcs are scaled to teleop.speed_mps"},
+    {.key = "teleop.boom_joint", .type = CONFIG_STRING, .count = 1,
+     .offset = offsetof(Sim_Config, teleop_boom_joint), .text_default = "boom_joint",
+     .help = "digger joint that I/K raise and lower in keyboard mode, if the robot has it"},
+    {.key = "teleop.bucket_joint", .type = CONFIG_STRING, .count = 1,
+     .offset = offsetof(Sim_Config, teleop_bucket_joint), .text_default = "bucket_joint",
+     .help = "digger joint that U/O curl and open in keyboard mode, if the robot has it"},
+    {.key = "teleop.tool_rate", .type = CONFIG_F32, .count = 1,
+     .offset = offsetof(Sim_Config, teleop_tool_rate), .minimum = 0.0, .maximum = 100.0,
+     .defaults = {0.5}, .help = "rad/s (or m/s) the keys move the digger joints' targets"},
 
     {.key = "lidar.enabled", .type = CONFIG_BOOL, .count = 1,
      .offset = offsetof(Sim_Config, lidar.enabled), .minimum = 0.0, .maximum = 1.0,
@@ -365,6 +419,12 @@ bool validate_config(const Sim_Config *config, char *error, u32 error_size)
                       (f64)pairs[i].values[0], (f64)pairs[i].values[1]);
             return false;
         }
+    }
+    if (config->soil_enabled && config->soil_elastic_stiffness <= config->soil_bekker_kphi) {
+        set_error(error, error_size,
+                  "soil.elastic_stiffness (%g) must be above soil.bekker_kphi (%g)",
+                  (f64)config->soil_elastic_stiffness, (f64)config->soil_bekker_kphi);
+        return false;
     }
     if (config->imu.rate > (f32)config->physics_hz) {
         set_error(

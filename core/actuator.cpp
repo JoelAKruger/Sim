@@ -38,7 +38,7 @@ bool create_actuators(Actuator_Set *set, const Robot *robot, Linear_Allocator *a
         const Robot_Joint *joint = &robot->joints[j];
         const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
         u32 node_id = 0;
-        if (joint->default_drive == DRIVE_NONE || B3_IS_NULL(joint->id) || urdf->control < 0 ||
+        if (joint->default_drive == DRIVE_NONE || joint->physics_joint < 0 || urdf->control < 0 ||
             !get_node_id(robot, urdf, &node_id)) {
             continue;
         }

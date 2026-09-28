@@ -168,11 +168,11 @@ static void test_rejects(Linear_Allocator *allocator)
 // roll about x, then pitch about y, then yaw about z, all about fixed axes.
 static void test_rpy(void)
 {
-    b3Quat yaw = make_quat_from_rpy(0.0, 0.0, 0.5 * M_PI);
-    v3 x = b3RotateVector(yaw, v3{1.0f, 0.0f, 0.0f});
+    Quat yaw = make_quat_from_rpy(0.0, 0.0, 0.5 * M_PI);
+    v3 x = rotate_vector(yaw, v3{1.0f, 0.0f, 0.0f});
     CHECK_NEAR(x.y, 1.0, 1e-6);
-    b3Quat combined = make_quat_from_rpy(0.5 * M_PI, 0.0, 0.5 * M_PI);
-    v3 y = b3RotateVector(combined, v3{0.0f, 1.0f, 0.0f});
+    Quat combined = make_quat_from_rpy(0.5 * M_PI, 0.0, 0.5 * M_PI);
+    v3 y = rotate_vector(combined, v3{0.0f, 1.0f, 0.0f});
     // Roll takes y to z; yaw leaves z alone.
     CHECK_NEAR(y.z, 1.0, 1e-6);
 }

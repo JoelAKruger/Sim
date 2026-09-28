@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "core/math.h"
+
 static void set_flat_normals(Stl_Mesh *mesh)
 {
     for (u32 t = 0; t < mesh->triangle_count; t++) {
@@ -13,8 +15,8 @@ static void set_flat_normals(Stl_Mesh *mesh)
         v3 a = {p[0], p[1], p[2]};
         v3 b = {p[3], p[4], p[5]};
         v3 c = {p[6], p[7], p[8]};
-        v3 normal = b3Cross(b - a, c - a);
-        f32 length = b3Length(normal);
+        v3 normal = cross(b - a, c - a);
+        f32 length = get_length(normal);
         normal = length > 0.0f ? (1.0f / length) * normal : v3{0.0f, 0.0f, 0.0f};
         for (u32 corner = 0; corner < 3; corner++) {
             f32 *out = mesh->normals + t * 9 + corner * 3;

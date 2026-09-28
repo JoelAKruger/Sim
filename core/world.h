@@ -1,14 +1,15 @@
 #pragma once
 
-#include <box3d/box3d.h>
-
 #include "core/actuator.h"
-#include "core/boulders.h"
 #include "core/allocator.h"
+#include "core/boulders.h"
 #include "core/config.h"
+#include "core/physics.h"
+#include "core/raycast.h"
 #include "core/robot.h"
 #include "core/sensors/imu.h"
 #include "core/sensors/lidar.h"
+#include "core/soil.h"
 #include "core/status_light.h"
 #include "core/terrain.h"
 #include "core/urdf.h"
@@ -23,22 +24,23 @@ enum Control_Mode {
 
 // A free rigid body that is not part of the robot: test boxes now, rocks later.
 struct Prop {
-    b3BodyId body;
+    u32 body; // in the physics
     v3 half_extents;
     u32 color; // 0xRRGGBB, for drawing
-    b3Transform previous; // pose before the most recent step, for render interpolation
-    b3Transform current;
+    Pose previous; // pose before the most recent step, for render interpolation
+    Pose current;
 };
 
-// The simulation. Owns the Box3D world; everything outside core/ reads it but never calls
-// Box3D directly.
+// The simulation. Owns the physics; everything outside core/ reads the world but never
+// calls the physics directly.
 struct World {
-    b3WorldId id;
+    Physics *physics;
     Sim_Config config;
     Terrain terrain;
-    b3HeightFieldData *height_field;
-    b3BodyId terrain_body;
+    Soil soil; // deformable soil set into the terrain, when has_soil
+    bool has_soil;
     Boulder_Field boulders; // fixed rocks on the terrain
+    Ray_Scene ray_scene; // what the sensors' rays can hit
     Prop props[WORLD_MAX_PROPS];
     u32 prop_count;
     u64 step_count;
@@ -60,8 +62,14 @@ struct World {
     bool has_imu;
     Lidar_Sensor lidar;
     bool has_lidar;
+
+    // A digger, if the robot has the joints teleop.boom_joint and teleop.bucket_joint name.
+    i32 boom_joint; // Robot_Joint index, or -1
+    i32 bucket_joint;
+    f32 bucket_soil_force; // N, the soil's push on the bucket over the last step
 };
 
+// The world must not move once created: the ray scene points into it.
 bool create_world(World *world, Linear_Allocator *allocator, const Sim_Config *config);
 void destroy_world(World *world);
 
@@ -80,6 +88,9 @@ bool load_robot(World *world, const char *xml, u64 xml_size, const char *resourc
 // A dynamic box centred at position, drawn in color (0xRRGGBB). False when the prop table
 // is full.
 bool add_box(World *world, v3 position, v3 half_extents, f32 density, u32 color);
+
+// The ground's height at (x, y): the soil's, as it is now, where there is soil.
+f32 get_world_ground_height(const World *world, f32 x, f32 y);
 
 // Distance to the first hit along a unit direction, or -1 for a miss.
 f32 cast_ray(const World *world, v3 origin, v3 direction, f32 max_distance);

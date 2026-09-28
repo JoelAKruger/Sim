@@ -1,8 +1,8 @@
 # Regolith
 
-A rover simulator for Nova's analogue lunar rover, built on Raylib and Box3D. It speaks
-ROS 2 Jazzy and SocketCAN natively. It is one small native program that starts
-in well under a second.
+A rover simulator for Nova's analogue lunar rover, built on Raylib and [Project Chrono](https://projectchrono.org), with deformable soil
+for digging. It speaks ROS 2 Jazzy and SocketCAN natively. It is one native program that
+starts in about a second.
 
 ## Build and run
 
@@ -22,9 +22,10 @@ from source.
 The window uses the system's OpenGL driver. On NixOS that works directly. Elsewhere,
 run it through [nixGL](https://github.com/nix-community/nixGL).
 
-nixpkgs, nix-ros-overlay and Box3D are pinned in `flake.lock`. nixpkgs follows the
-overlay's own pin, so ROS packages come prebuilt from `ros.cachix.org`.
-`nix flake update` moves the pins forward.
+nixpkgs and nix-ros-overlay are pinned in `flake.lock`. nixpkgs follows the overlay's own
+pin, so ROS packages come prebuilt from `ros.cachix.org`. `nix flake update` moves the pins
+forward. Chrono 10.0.0 is pinned in `nix/packages/chrono`: it is built from source, only its
+core and Chrono::Vehicle, with one small fix to SCM. The first build takes a while.
 
 ```sh
 nix build                           # builds; runs tests, style and naming checks → ./result
@@ -94,7 +95,8 @@ reason.
 
 - Fixed joints are merged into single bodies.
 - Motors are near-ideal: every driven joint can apply `robot.motor_torque` (10000 N·m by
-  default). The URDF's effort and velocity limits are ignored; its position limits apply.
+  default). Past that it stalls, holding that torque until it catches up. The URDF's effort
+  and velocity limits are ignored; its position limits apply.
 - Masses come from the URDF inertials; implausible ones are reported and repaired.
 - Meshes must be STL (`file://`, `package://` or relative). A visual that can't be
   loaded is drawn as its link's collision shapes instead.
@@ -139,7 +141,8 @@ The sim plays the rover's BLCMD motor controllers and LED strip on a SocketCAN i
 (`can.interface`, default `can0` as in the URDF), so the drive stack talks to it as it does
 to the hardware. Every URDF joint with a `<ros2_control>` block that gives a `canid` is a
 BLCMD. Banksia has eight: wheels `flw`, `blw`, `brw`, `frw` are 1–4, and pivots `flp`,
-`blp`, `brp`, `frp` are 5–8. The protocol is the one the previous (Unity) sim implemented.
+`blp`, `brp`, `frp` are 5–8. Nodes 10–15 are free for more (the digger uses 10 and 11); 9 is
+the LED strip. The protocol is the one the previous (Unity) sim implemented.
 
 - **Id:** `node << 4 | function`. The value is a big-endian 16-bit number in bytes 0–1.
 - **Drive at Speed (3):** `rad/s = 30 · value / 32767` at the joint.
@@ -264,16 +267,61 @@ terrain and fixed in the ground.
 - **Shape:** irregular convex rocks, partly buried, only where the ground is level enough
   for them.
 - **Spawn area:** the 6 m around `robot.spawn` is kept clear.
-- **What they are:** static Box3D hulls, so the rover collides with them and the LiDAR and
-  camera see them.
+- **What they are:** fixed convex hulls, so the rover collides with them and the LiDAR and
+  camera see them. None are placed on the soil.
 - **Layout:** it comes from `terrain.seed`, the same every run.
+
+## Soil and digging
+
+The physics is [Project Chrono](https://projectchrono.org) 10. A patch of deformable soil
+(`soil.size_m`, 20 × 20 m by default) is set into the terrain around `robot.spawn`, using
+Chrono::Vehicle's Soil Contact Model (SCM). Everywhere else the ground is rigid.
+
+- **What the soil does:** wheels and tools sink into it and leave ruts. Its pressure
+  follows Bekker-Wong (`soil.bekker_*`) and its shear follows Mohr-Coulomb and
+  Janosi-Hanamoto (`soil.cohesion_pa`, `soil.friction_deg`, `soil.janosi_m`), so wheels
+  slip and dig in.
+- **Bulldozing:** with `soil.bulldozing` on, displaced soil heaps up beside ruts and cuts
+  and slides down when steeper than `soil.erosion_angle_deg`.
+- **Default parameters:** loose, dry sand, as in Chrono's own rover demos. Set them to
+  your regolith simulant's.
+- **Resolution:** the surface is a grid `soil.spacing_m` apart (2 cm by default). The
+  viewer, the LiDAR and the camera all see it as it deforms.
+- **Rigid ground:** `soil.enabled: false` makes the whole terrain rigid, and is much
+  faster.
+
+**Digging:** SCM is a surface model. A bucket pushed into it cuts a trench and heaps the
+soil beside it, and the soil resists (the panel shows the bucket's soil load). Nothing is
+carried in the bucket, though, and the soil doesn't pour: that would take a particle or
+continuum model (Chrono's CRM), which needs an NVIDIA GPU.
+
+**The digger:** `robots/banksia_digger.urdf` is Banksia with a placeholder digger: a boom
+on the front of the chassis (`boom_joint`) and a bucket at its tip (`bucket_joint`). Both
+are position-controlled BLCMDs, on CAN nodes 10 and 11. In keyboard mode, **I/K** raise and
+lower the boom and **U/O** curl and open the bucket (`teleop.boom_joint`,
+`teleop.bucket_joint` and `teleop.tool_rate`). Swap in the real digger's URDF when it
+exists.
+
+```sh
+nix run . -- --urdf robots/banksia_digger.urdf      # from a checkout
+cansend can0 0A4#1000                               # boom (node 10) down 0.2 rad
+```
+
+**Speed:** the soil is the expensive part. On an 8-core laptop the default setup runs at
+about a fifth of real time, and about two thirds with `soil.enabled: false`. Very light
+objects (the small starting cubes) jitter on the soil at the default step size.
+
+**Determinism:** with `world.workers: 1` (the default), identical inputs give identical
+state hashes. More workers are faster but no longer repeatable.
 
 ## Layout and modularity
 
 - `core/`: the simulation: world, terrain, settings, and the lock-free shared state between
   threads. `core/sensors/` holds the IMU and LiDAR models and the camera's pinhole
-  model. It has no ROS, no Raylib and no sockets, and is the only code that calls
-  Box3D.
+  model. It has no ROS, no Raylib and no sockets. `core/physics.cpp` is the only code that
+  includes Chrono (with exceptions and RTTI, like `ros_bridge.cpp`); the rest of `core/`
+  uses it through plain indices in `core/physics.h`. The sensors cast their rays in
+  `core/raycast.cpp`, on many threads at once, rather than through Chrono.
 - `render/`: the Raylib viewer, and the sensor camera (`sensor_camera.cpp`), which draws the
   same scene.
 - `ros/`: the optional ROS 2 adapter. `ros_bridge.cpp` is the only code that includes
@@ -285,12 +333,12 @@ terrain and fixed in the ground.
   and tested.
 - `app/main.cpp`: the fixed-step loop and thread wiring. It is the same code in every
   build configuration.
-- `tests/`: shared-state concurrency, settings, terrain/physics agreement, actuators, the
-  CAN codec, sensors, determinism.
+- `tests/`: shared-state concurrency, settings, terrain/physics agreement, soil sinkage,
+  digging, actuators, the CAN codec, sensors, determinism.
 
 Adapters talk to the core only through `core/shared_state.h` and plain structs, and they are
 chosen at link time. `nix build .#minimal` has neither adapter. The physics doesn't
-depend on which adapters are built: every build gives bit-identical state hashes.
+depend on which adapters are built: every build gives the same state hashes.
 
 Naming: `verb_noun` functions (`step_world`, `get_sim_time`), `Upper_Snake` structs,
 `lower_case` variables, and `u32`/`f32`/`v3` types. `tools/check_naming.sh` and
@@ -303,7 +351,8 @@ along the bottom. The 3D view fills the rest.
 
 - **Control:** a CAN / KEYBOARD switch (or **M**). Below it is what the selected source
   is doing: listening on the CAN interface, no interface, or ignoring CAN commands while
-  the keyboard drives. The LED strip's colour is shown here too.
+  the keyboard drives. The LED strip's colour is shown here too, and with a digger, how hard
+  the soil pushes back on its bucket.
 - **Simulation:** Pause / Resume (**P**), Step (**N**, while paused) and Reset robot (**R**).
   **Space** still drops a large test box at the view centre.
 - **View:** switches for following the robot (**F**), collision shapes (**C**), LiDAR

@@ -19,7 +19,6 @@ pkgs.mkShell {
   inputsFrom = [ regolith ];
   packages = [ ros-env pkgs.can-utils pkgs.gdb pkgs.clang-tools ];
 
-  BOX3D_SOURCE_DIR = regolith.box3d-src;
   REGOLITH_FONT_REGULAR = "${regolith.fonts}/JetBrainsMono-Regular.ttf";
   REGOLITH_FONT_BOLD = "${regolith.fonts}/JetBrainsMono-SemiBold.ttf";
 

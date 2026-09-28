@@ -10,9 +10,10 @@
 static const char *banksia_path;
 
 // A 1 kg box with two sensor links: imu_link rolled 90° about x, lidar_link above the box.
+// Heavy enough to rest still on the soil: a light body chatters on it.
 static const char *sensor_robot =
     "<robot name='sensor_box'>"
-    "  <link name='base'><inertial><mass value='1'/><inertia ixx='0.01' iyy='0.01' izz='0.01' "
+    "  <link name='base'><inertial><mass value='20'/><inertia ixx='0.5' iyy='0.5' izz='0.5' "
     "ixy='0' ixz='0' iyz='0'/></inertial>"
     "    <collision><geometry><box size='0.4 0.4 0.4'/></geometry></collision></link>"
     "  <link name='imu_link'/>"
@@ -30,6 +31,8 @@ static Sim_Config make_sensor_config(void)
     config.terrain_relief = 0.0f;
     config.crater_count = 0;
     config.boulder_count = 0; // bare ground, so every LiDAR return is on it
+    config.soil_enabled =
+        false; // rigid, so the robot is still at once (test_lidar_ground has soil)
     config.imu.enabled = true;
     config.lidar.enabled = true;
     snprintf(config.imu.frame, sizeof(config.imu.frame), "base");
@@ -114,8 +117,8 @@ static void test_imu_at_rest(void)
                    (f64)acceleration.x, (f64)acceleration.y, (f64)acceleration.z);
             CHECK(count >= 199 && count <= 201);
             CHECK(ordered);
-            CHECK(b3Length(acceleration - expected[f]) < 0.01f);
-            CHECK(b3Length(rate) < 1e-3f);
+            CHECK(get_length(acceleration - expected[f]) < 0.01f);
+            CHECK(get_length(rate) < 1e-3f);
         }
         finish_world(&world, &allocator);
     }
@@ -147,18 +150,19 @@ static void test_imu_spin(void)
         Linear_Allocator allocator;
         static World world;
         if (create_sensor_world(&world, &allocator, &config, sensor_robot)) {
-            b3BodyId body = world.robot.bodies[0].id;
+            u32 body = world.robot.bodies[0].physics_body;
             // Lifted well clear of the ground, so it falls freely.
-            b3Body_SetTransform(body, v3{20.0f, 0.0f, 50.0f}, b3Body_GetRotation(body));
-            b3Body_SetAngularVelocity(body, v3{0.0f, 0.0f, 0.5f});
+            Pose lifted = {v3{20.0f, 0.0f, 50.0f}, get_body_pose(world.physics, body).q};
+            set_body_pose(world.physics, body, lifted);
+            set_body_velocity(world.physics, body, v3{0.0f, 0.0f, 0.0f}, v3{0.0f, 0.0f, 0.5f});
             reset_imu(&world.imu);
             v3 rate, acceleration;
             bool ordered;
             average_imu(&world, 0.5f, &rate, &acceleration, &ordered);
             printf("  imu on %s spinning: (%.4f, %.4f, %.4f) rad/s, |a| %.4f g\n", frames[f],
-                   (f64)rate.x, (f64)rate.y, (f64)rate.z, (f64)b3Length(acceleration));
-            CHECK(b3Length(rate - expected[f]) < 1e-3f);
-            CHECK(b3Length(acceleration) < 1e-4f);
+                   (f64)rate.x, (f64)rate.y, (f64)rate.z, (f64)get_length(acceleration));
+            CHECK(get_length(rate - expected[f]) < 1e-3f);
+            CHECK(get_length(acceleration) < 1e-4f);
         }
         finish_world(&world, &allocator);
     }
@@ -186,17 +190,19 @@ static u64 hash_imu_run(u32 seed)
     return hash;
 }
 
-// Flat ground seen from 0.5 m up: every return lies on it, inside the field of view.
+// Flat ground seen from 0.5 m up: every return lies on it, inside the field of view. The
+// robot stands on the soil, so the rays must see the soil as it has settled.
 static void test_lidar_ground(void)
 {
     Sim_Config config = make_sensor_config();
+    config.soil_enabled = true;
     config.lidar.range_noise = 0.0f;
     config.lidar.threads = 3;
     Linear_Allocator allocator;
     static World world;
     if (create_sensor_world(&world, &allocator, &config, sensor_robot)) {
-        run_steps(&world, 1.0f);
-        CHECK(world.lidar.frame_number == 10);
+        run_steps(&world, 3.0f); // settled into the soil
+        CHECK(world.lidar.frame_number == 30);
         CHECK(take_lidar_frame(&world.lidar) != NULL);
         u64 rays_before = world.lidar.rays_cast;
         const Lidar_Frame *frame = NULL;
@@ -214,17 +220,17 @@ static void test_lidar_ground(void)
         CHECK(rays >= 19900 && rays <= 20100);
         CHECK(frame->count > 2000 && frame->count < 4000); // the ground band is about 13%
 
-        b3Transform pose = get_sensor_pose(&world.robot, &world.lidar.mount);
+        Pose pose = get_sensor_pose(&world.robot, &world.lidar.mount);
         f32 worst = 0.0f;
         bool in_fov = true, in_range = true, in_time = true;
         u32 lines_seen = 0;
         for (u32 i = 0; i < frame->count; i++) {
             const Lidar_Point *point = &frame->points[i];
             v3 local = {point->x, point->y, point->z};
-            v3 world_point = b3TransformPoint(pose, local);
-            f32 ground = get_terrain_height(&world.terrain, world_point.x, world_point.y);
+            v3 world_point = transform_point(pose, local);
+            f32 ground = get_world_ground_height(&world, world_point.x, world_point.y);
             worst = max(worst, absolute(world_point.z - ground));
-            f32 range = b3Length(local);
+            f32 range = get_length(local);
             f32 elevation = asinf(point->z / range) * 180.0f / PI_F32;
             in_fov = in_fov && elevation >= -7.01f && elevation <= 52.01f;
             in_range = in_range && range >= 0.1f && range <= 40.0f;
@@ -311,7 +317,7 @@ static void test_banksia(void)
         average_imu(&world, 0.5f, &rate, &acceleration, &ordered);
         printf("  banksia imu: (%.4f, %.4f, %.4f) g\n", (f64)acceleration.x, (f64)acceleration.y,
                (f64)acceleration.z);
-        CHECK(b3Length(acceleration - v3{0.0f, 0.0f, 1.0f}) < 0.02f);
+        CHECK(get_length(acceleration - v3{0.0f, 0.0f, 1.0f}) < 0.02f);
         const Lidar_Frame *frame = get_last_lidar_frame(&world.lidar);
         CHECK(frame && frame->count > 1000);
     }
@@ -323,13 +329,13 @@ static void test_camera_model(void)
 {
     // The optical frame looks along the body's x, with its x to the body's right (-y) and its
     // y down (-z), as realsense2_camera's optical frames do.
-    b3Quat optical = get_optical_rotation();
-    v3 look = b3RotateVector(optical, v3{0.0f, 0.0f, 1.0f});
-    v3 right = b3RotateVector(optical, v3{1.0f, 0.0f, 0.0f});
-    v3 down = b3RotateVector(optical, v3{0.0f, 1.0f, 0.0f});
-    CHECK(b3Length(look - v3{1.0f, 0.0f, 0.0f}) < 1e-6f);
-    CHECK(b3Length(right - v3{0.0f, -1.0f, 0.0f}) < 1e-6f);
-    CHECK(b3Length(down - v3{0.0f, 0.0f, -1.0f}) < 1e-6f);
+    Quat optical = get_optical_rotation();
+    v3 look = rotate_vector(optical, v3{0.0f, 0.0f, 1.0f});
+    v3 right = rotate_vector(optical, v3{1.0f, 0.0f, 0.0f});
+    v3 down = rotate_vector(optical, v3{0.0f, 1.0f, 0.0f});
+    CHECK(get_length(look - v3{1.0f, 0.0f, 0.0f}) < 1e-6f);
+    CHECK(get_length(right - v3{0.0f, -1.0f, 0.0f}) < 1e-6f);
+    CHECK(get_length(down - v3{0.0f, 0.0f, -1.0f}) < 1e-6f);
     char name[64];
     make_camera_frame_name("d415", "_color_optical_frame", name, sizeof(name));
     CHECK(strcmp(name, "d415_color_optical_frame") == 0);

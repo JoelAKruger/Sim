@@ -3,7 +3,7 @@
 <package format="3">
   <name>regolith</name>
   <version>0.1.0</version>
-  <description>Rover simulator on Raylib and Box3D, with native ROS 2 and SocketCAN interfaces.</description>
+  <description>Rover simulator on Raylib and Project Chrono, with native ROS 2 and SocketCAN interfaces.</description>
   <maintainer email="pinklemonday@gmail.com">Monash Nova Rover</maintainer>
   <license>MIT</license>
 

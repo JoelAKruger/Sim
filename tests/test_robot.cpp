@@ -16,6 +16,7 @@ static Sim_Config make_flat_config(f32 gravity)
     config.terrain_relief = 0.0f;
     config.crater_count = 0;
     config.gravity.z = gravity;
+    config.soil_enabled = false; // rigid ground; test_soil_drive has the soil
     return config;
 }
 
@@ -52,15 +53,16 @@ static const Robot_Body *get_body_of_link(const Robot *robot, const char *link)
 
 static f32 get_uprightness(const Robot *robot)
 {
-    b3Quat q = get_body_of_link(robot, "base_link")->current.q;
-    return b3RotateVector(q, v3{0.0f, 0.0f, 1.0f}).z;
+    Quat q = get_body_of_link(robot, "base_link")->current.q;
+    return rotate_vector(q, v3{0.0f, 0.0f, 1.0f}).z;
 }
 
 static f32 get_max_body_speed(const Robot *robot)
 {
     f32 speed = 0.0f;
     for (u32 b = 0; b < robot->body_count; b++) {
-        speed = max(speed, b3Length(b3Body_GetLinearVelocity(robot->bodies[b].id)));
+        speed = max(speed,
+                    get_length(get_body_velocity(robot->physics, robot->bodies[b].physics_body)));
     }
     return speed;
 }
@@ -71,10 +73,10 @@ static f32 get_max_joint_separation(const Robot *robot, const char **worst = NUL
     f32 separation = 0.0f;
     const char *name = "";
     for (u32 j = 0; j < robot->joint_count; j++) {
-        b3JointId id = robot->joints[j].ball >= 0 ? robot->balls[robot->joints[j].ball].id
-                                                  : robot->joints[j].id;
-        if (!B3_IS_NULL(id) && b3Joint_GetLinearSeparation(id) > separation) {
-            separation = b3Joint_GetLinearSeparation(id);
+        i32 id = robot->joints[j].ball >= 0 ? (i32)robot->balls[robot->joints[j].ball].physics_joint
+                                            : robot->joints[j].physics_joint;
+        if (id >= 0 && get_joint_separation(robot->physics, (u32)id) > separation) {
+            separation = get_joint_separation(robot->physics, (u32)id);
             name = robot->model.joints[robot->joints[j].urdf_joint].name;
         }
     }
@@ -159,20 +161,20 @@ static void test_diff_bar_couples(void)
         i32 right = find_robot_joint(robot, "chassis_to_right_leg");
         const Robot_Joint *left_joint = &robot->joints[left];
         const Robot_Joint *right_joint = &robot->joints[right];
-        b3BodyId chassis = robot->bodies[left_joint->body_a].id;
-        b3BodyId left_leg = robot->bodies[left_joint->body_b].id;
+        u32 chassis = robot->bodies[left_joint->body_a].physics_body;
+        u32 left_leg = robot->bodies[left_joint->body_b].physics_body;
         // Twist the left leg against the chassis about the leg's own pivot axis.
         for (u32 i = 0; i < 120; i++) {
-            b3Quat frame =
-                b3MulQuat(robot->bodies[left_joint->body_a].current.q, left_joint->frame_a.q);
-            v3 torque = b3MulSV(2.0f, b3RotateVector(frame, v3{0.0f, 0.0f, 1.0f}));
-            b3Body_ApplyTorque(left_leg, torque, true);
-            b3Body_ApplyTorque(chassis, b3MulSV(-1.0f, torque), true);
+            Quat frame =
+                multiply_quats(robot->bodies[left_joint->body_a].current.q, left_joint->frame_a.q);
+            v3 torque = 2.0f * rotate_vector(frame, v3{0.0f, 0.0f, 1.0f});
+            apply_body_torque(world.physics, left_leg, torque);
+            apply_body_torque(world.physics, chassis, -torque);
             step_world(&world);
         }
         // Compare pitch about the chassis's lateral axis, whatever each joint's axis convention.
-        v3 left_axis = b3RotateVector(left_joint->frame_a.q, v3{0.0f, 0.0f, 1.0f});
-        v3 right_axis = b3RotateVector(right_joint->frame_a.q, v3{0.0f, 0.0f, 1.0f});
+        v3 left_axis = rotate_vector(left_joint->frame_a.q, v3{0.0f, 0.0f, 1.0f});
+        v3 right_axis = rotate_vector(right_joint->frame_a.q, v3{0.0f, 0.0f, 1.0f});
         f32 left_pitch = left_joint->position * left_axis.y;
         f32 right_pitch = right_joint->position * right_axis.y;
         printf("  diff bar: left leg pitched %.3f rad, right %.3f rad, worst joint gap %.2f mm\n",
@@ -192,9 +194,9 @@ static f32 wrap_turn(f32 angle)
     return angle - 2.0f * PI_F32 * floorf((angle + PI_F32) / (2.0f * PI_F32));
 }
 
-static f32 get_yaw(b3Quat q)
+static f32 get_yaw(Quat q)
 {
-    v3 forward = b3RotateVector(q, v3{1.0f, 0.0f, 0.0f});
+    v3 forward = rotate_vector(q, v3{1.0f, 0.0f, 0.0f});
     return atan2f(forward.y, forward.x);
 }
 
@@ -213,7 +215,7 @@ static void test_drives(void)
         set_control_mode(&world, CONTROL_KEYBOARD);
         drive_robot(robot, 0.4f, 0.0f);
         run_steps(&world, 3.0f);
-        v3 moved = b3Sub(get_body_of_link(robot, "base_link")->current.p, start);
+        v3 moved = get_body_of_link(robot, "base_link")->current.p - start;
         printf("  drive: 3 s at 0.4 m/s moved %.3f m forward, %.3f m sideways\n", (f64)moved.x,
                (f64)moved.y);
         CHECK(moved.x > 0.8f && moved.x < 1.4f);
@@ -226,7 +228,7 @@ static void test_drives(void)
         }
         f32 turned =
             wrap_turn(get_yaw(get_body_of_link(robot, "base_link")->current.q) - yaw_start);
-        v3 drift = b3Sub(get_body_of_link(robot, "base_link")->current.p, start);
+        v3 drift = get_body_of_link(robot, "base_link")->current.p - start;
         printf("  turn: 2 s at 0.5 rad/s turned %.3f rad\n", (f64)turned);
         // The pivots swing first, then it spins on the spot.
         CHECK(turned > 0.7f && turned < 1.1f);
@@ -274,13 +276,14 @@ static void test_ball_angles(void)
         f32 a = 0.4f, b = -0.3f, c = 0.7f;
         // Rotate the tip about the pivot: Rx(a), then Ry(b), then c about the -z axis.
         const Robot_Ball *ball = &robot->balls[0];
-        b3Transform base = robot->bodies[ball->body_a].current;
-        b3Transform pivot = b3MulTransforms(base, ball->frame_a);
-        b3Quat turn = b3MulQuat(make_quat_from_axis_angle(v3{1.0f, 0.0f, 0.0f}, a),
-                                b3MulQuat(make_quat_from_axis_angle(v3{0.0f, 1.0f, 0.0f}, b),
+        Pose base = robot->bodies[ball->body_a].current;
+        Pose pivot = multiply_poses(base, ball->frame_a);
+        Quat turn =
+            multiply_quats(make_quat_from_axis_angle(v3{1.0f, 0.0f, 0.0f}, a),
+                           multiply_quats(make_quat_from_axis_angle(v3{0.0f, 1.0f, 0.0f}, b),
                                           make_quat_from_axis_angle(v3{0.0f, 0.0f, -1.0f}, c)));
-        b3Quat tip = b3MulQuat(pivot.q, turn);
-        b3Body_SetTransform(robot->bodies[ball->body_b].id, pivot.p, tip);
+        Quat tip = multiply_quats(pivot.q, turn);
+        set_body_pose(world.physics, robot->bodies[ball->body_b].physics_body, Pose{pivot.p, tip});
         read_robot_state(robot);
         CHECK_NEAR(robot->joints[find_robot_joint(robot, "bx")].position, a, 1e-4);
         CHECK_NEAR(robot->joints[find_robot_joint(robot, "by")].position, b, 1e-4);
@@ -412,8 +415,8 @@ static void test_actuators(void)
     const Robot_Actuator *front_left = find_actuator(&world, 1);
     f32 wheel_speed = absolute(robot->joints[front_left->joint].velocity);
     CHECK_NEAR(wheel_speed, 2.0, 0.2);
-    v3 moved = b3InvRotateVector(get_body_of_link(robot, "base_link")->current.q,
-                                 get_body_of_link(robot, "base_link")->current.p - start);
+    v3 moved = inverse_rotate_vector(get_body_of_link(robot, "base_link")->current.q,
+                                     get_body_of_link(robot, "base_link")->current.p - start);
     CHECK(moved.x > 0.5f); // about 2 rad/s × wheel radius × 2 s, forwards
 
     // Silence: the watchdog expires the commands, and the wheels hold.
@@ -518,7 +521,7 @@ static void test_blcmd_drives_straight(void)
         run_steps(&world, 1.0f);
         const Robot_Body *base = get_body_of_link(robot, "base_link");
         v3 start = base->current.p;
-        b3Quat start_rotation = base->current.q;
+        Quat start_rotation = base->current.q;
         for (u32 i = 0; i < 20; i++) {
             for (u32 node_id = 1; node_id <= 4; node_id++) {
                 const Robot_Actuator *actuator = find_actuator(&world, node_id);
@@ -532,7 +535,7 @@ static void test_blcmd_drives_straight(void)
             }
             run_steps(&world, 0.1f);
         }
-        v3 moved = b3InvRotateVector(start_rotation, base->current.p - start);
+        v3 moved = inverse_rotate_vector(start_rotation, base->current.p - start);
         f32 turned = get_yaw(base->current.q) - get_yaw(start_rotation);
         printf("  blcmd: 3.75 rad/s on every wheel moved %.3f m forward, %.3f m sideways, "
                "turned %.3f rad\n",
@@ -609,11 +612,11 @@ static void test_reset(void)
         // Driving over CAN, then flipped onto its back a metre up.
         command_wheels(&world, 3.0f);
         run_steps(&world, 1.0f);
-        b3Transform flip = {v3{0.0f, 0.0f, 1.0f},
-                            make_quat_from_axis_angle(v3{1.0f, 0.0f, 0.0f}, PI_F32)};
+        Pose flip = {v3{0.0f, 0.0f, 1.0f}, make_quat_from_axis_angle(v3{1.0f, 0.0f, 0.0f}, PI_F32)};
         for (u32 b = 0; b < robot->body_count; b++) {
-            b3Transform pose = b3MulTransforms(flip, b3Body_GetTransform(robot->bodies[b].id));
-            b3Body_SetTransform(robot->bodies[b].id, pose.p, pose.q);
+            u32 body = robot->bodies[b].physics_body;
+            set_body_pose(world.physics, body,
+                          multiply_poses(flip, get_body_pose(world.physics, body)));
         }
         run_steps(&world, 2.0f);
         printf("  reset: flipped, uprightness %.2f\n", (f64)get_uprightness(robot));
@@ -621,16 +624,78 @@ static void test_reset(void)
 
         reset_robot(&world);
         run_steps(&world, 2.0f);
-        v3 moved = b3Sub(get_body_of_link(robot, "base_link")->current.p, settled);
+        v3 moved = get_body_of_link(robot, "base_link")->current.p - settled;
         printf("  reset: back %.3f m from where it settled, uprightness %.3f\n",
-               (f64)b3Length(moved), (f64)get_uprightness(robot));
-        CHECK(b3Length(moved) < 0.05f);
+               (f64)get_length(moved), (f64)get_uprightness(robot));
+        CHECK(get_length(moved) < 0.05f);
         CHECK(get_uprightness(robot) > 0.98f);
         CHECK(get_max_body_speed(robot) < 0.01f);
         CHECK(get_max_joint_separation(robot) < 0.005f);
         for (u32 a = 0; a < world.actuators.count; a++) {
             CHECK(!world.actuators.actuators[a].active);
         }
+    }
+    destroy_world(&world);
+    destroy_allocator(&allocator);
+}
+
+static const char *digger_path;
+
+// Banksia on the soil, driven through it: the wheels leave ruts. Then the digger lowers its
+// bucket, curls it and drives forward, and cuts a trench the soil pushes back against.
+static void test_soil_digging(void)
+{
+    Sim_Config config = make_flat_config(-9.81f);
+    config.soil_enabled = true;
+    config.soil_size[0] = config.soil_size[1] = 8.0f;
+    Linear_Allocator allocator;
+    CHECK(create_allocator(&allocator, 64 * MEGABYTE));
+    static World world;
+    CHECK(create_world(&world, &allocator, &config));
+    u64 size = 0;
+    char *xml = read_file(digger_path, &size);
+    CHECK(xml != NULL);
+    char error[256];
+    bool loaded = xml && load_robot(&world, xml, size, "", error, sizeof(error));
+    CHECK(loaded);
+    free(xml);
+    if (loaded) {
+        Robot *robot = &world.robot;
+        CHECK(world.boom_joint >= 0 && world.bucket_joint >= 0);
+        run_steps(&world, 1.0f);
+        f32 untouched = world.soil.grid.max_height;
+        u64 changes = world.soil.changes;
+        CHECK(changes > 0); // it has sunk in a little already
+
+        // Bucket down into the soil, curled a little, and forwards at 0.1 m/s.
+        set_control_mode(&world, CONTROL_KEYBOARD);
+        robot->joints[world.boom_joint].command = 0.6f;
+        robot->joints[world.bucket_joint].command = 0.3f;
+        run_steps(&world, 1.5f);
+        v3 start = get_body_of_link(robot, "base_link")->current.p;
+        f32 most_force = 0.0f;
+        for (u32 i = 0; i < 3 * world.config.physics_hz; i++) {
+            drive_robot(robot, 0.1f, 0.0f);
+            step_world(&world);
+            most_force = max(most_force, world.bucket_soil_force);
+        }
+        v3 moved = get_body_of_link(robot, "base_link")->current.p - start;
+        // The trench: the lowest soil anywhere is well below where the ground started.
+        f32 lowest = INFINITY;
+        const Terrain *grid = &world.soil.grid;
+        for (u32 i = 0; i < grid->rows * grid->cols; i++) {
+            lowest = min(lowest, grid->heights[i]);
+        }
+        printf("  digging: moved %.2f m, bucket load up to %.0f N, trench %.0f mm deep, "
+               "%llu soil updates\n",
+               (f64)moved.x, (f64)most_force, (f64)((untouched - lowest) * 1000.0f),
+               (unsigned long long)world.soil.changes);
+        CHECK(moved.x > 0.05f);
+        CHECK(most_force > 20.0f);
+        CHECK(untouched - lowest > 0.03f);
+        CHECK(get_uprightness(robot) > 0.9f);
+    } else {
+        fprintf(stderr, "  %s\n", error);
     }
     destroy_world(&world);
     destroy_allocator(&allocator);
@@ -651,6 +716,10 @@ int main(int argc, char **argv)
         test_blcmd_drives_straight();
         test_reset();
         test_steering();
+    }
+    if (argc > 2) {
+        digger_path = argv[2];
+        test_soil_digging();
     }
     return report_checks("robot");
 }

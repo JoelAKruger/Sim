@@ -1,6 +1,6 @@
 #pragma once
 
-#include <box3d/math_functions.h>
+#include "core/math.h"
 
 #include "core/allocator.h"
 
@@ -32,7 +32,7 @@ struct Urdf_Geometry {
 // One <visual> or <collision>.
 struct Urdf_Shape {
     u32 link;
-    b3Transform origin; // in the link frame
+    Pose origin; // in the link frame
     Urdf_Geometry geometry;
     f32 color[4]; // visuals: rgba from the material, resolved after parsing
     char material[URDF_NAME_SIZE];
@@ -41,8 +41,8 @@ struct Urdf_Shape {
 struct Urdf_Inertial {
     bool present;
     f32 mass;
-    b3Transform origin; // centre of mass and inertia axes, in the link frame
-    b3Matrix3 inertia; // about the centre of mass, in the inertia axes
+    Pose origin; // centre of mass and inertia axes, in the link frame
+    Mat3 inertia; // about the centre of mass, in the inertia axes
 };
 
 struct Urdf_Link {
@@ -69,7 +69,7 @@ struct Urdf_Joint {
     Urdf_Joint_Type type;
     u32 parent; // link indices
     u32 child;
-    b3Transform origin; // child frame in the parent frame at q = 0
+    Pose origin; // child frame in the parent frame at q = 0
     v3 axis; // unit, in the child frame
     bool has_limits;
     f32 lower;
@@ -133,4 +133,4 @@ i32 find_urdf_joint(const Urdf_Model *model, const char *name);
 const char *get_control_param(const Urdf_Model *model, i32 control, const char *name);
 
 // URDF roll-pitch-yaw (fixed axes x, then y, then z) as a quaternion.
-b3Quat make_quat_from_rpy(f64 roll, f64 pitch, f64 yaw);
+Quat make_quat_from_rpy(f64 roll, f64 pitch, f64 yaw);

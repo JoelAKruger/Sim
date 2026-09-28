@@ -1,0 +1,14 @@
+diff --git a/src/chrono_vehicle/terrain/SCMTerrain.cpp b/src/chrono_vehicle/terrain/SCMTerrain.cpp
+index fed718b..ea99d55 100644
+--- a/src/chrono_vehicle/terrain/SCMTerrain.cpp
++++ b/src/chrono_vehicle/terrain/SCMTerrain.cpp
+@@ -1065,6 +1065,9 @@ bool SCMLoader::RayOBBtest(const ActiveDomainInfo& p, const ChVector3d& from, co
+         return false;
+     if (tmin > tmax)
+         return false;
++    // The ray only runs m_test_offset_down from its origin: a box beyond that is missed.
++    if (tmin > m_test_offset_down)
++        return false;
+     return true;
+ }
+ 

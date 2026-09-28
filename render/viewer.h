@@ -26,6 +26,8 @@ struct Viewer_Actions {
     bool single_step;
     f32 drive; // -1..1, from the arrow keys
     f32 turn; // -1..1, positive to the left
+    f32 boom; // -1..1 from I and K: positive lowers the digger's boom
+    f32 bucket; // -1..1 from U and O: positive curls the bucket in
 };
 
 // Measured by the main loop and shown in the overlay.
@@ -48,7 +50,7 @@ struct Viewer_Mesh {
 struct Viewer_Visual {
     u32 link;
     u32 mesh; // index into Viewer::meshes
-    b3Transform origin; // in the link frame
+    Pose origin; // in the link frame
     Matrix correction; // puts a generated primitive into URDF's axis convention
     Color color;
     bool collision; // drawn as a wireframe when collision view is on
@@ -60,6 +62,12 @@ struct Viewer {
     Mesh *terrain_tiles;
     Vector4 *terrain_tile_bounds; // per tile: a bounding sphere (x, y, z, radius)
     u32 terrain_tile_count;
+    // The soil, drawn over the hole in the terrain tiles and re-uploaded tile by tile as
+    // it deforms.
+    Mesh *soil_tiles;
+    Vector4 *soil_tile_bounds;
+    u32 *soil_tile_versions; // each tile's Soil::tile_versions when last uploaded
+    u32 soil_tile_count;
     Mesh box;
     Mesh boulder_mesh; // every boulder, in world space
     bool has_boulder_mesh;

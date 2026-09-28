@@ -103,8 +103,12 @@ static void test_other_frames(void)
     CHECK(decode_blcmd_frame(&high_id, &flw).kind == BLCMD_MESSAGE_NONE);
     Can_Frame node_zero = make_frame(0x003, 2, 0x7f, 0xff);
     CHECK(decode_blcmd_frame(&node_zero, NULL).kind == BLCMD_MESSAGE_NONE);
-    Can_Frame node_ten = make_frame(0x0a3, 2, 0x7f, 0xff);
-    CHECK(decode_blcmd_frame(&node_ten, NULL).kind == BLCMD_MESSAGE_NONE);
+    Can_Frame node_nine = make_frame(0x093, 2, 0x7f, 0xff); // the LED strip's
+    CHECK(decode_blcmd_frame(&node_nine, NULL).kind == BLCMD_MESSAGE_NONE);
+    Can_Frame node_ten = make_frame(0x0a3, 2, 0x7f, 0xff); // a digger joint's
+    CHECK(is_blcmd_frame(&node_ten));
+    Can_Frame node_sixteen = make_frame(0x103, 2, 0x7f, 0xff);
+    CHECK(!is_blcmd_frame(&node_sixteen));
 }
 
 int main(void)

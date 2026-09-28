@@ -31,36 +31,22 @@ static void get_ground_under(const Terrain *terrain, f32 x, f32 y, f32 radius, f
     }
 }
 
-// Appends a hull's faces as triangles (a fan per face, counter-clockwise from outside).
-static void add_hull_triangles(Boulder_Field *field, const b3HullData *hull, u32 capacity)
+// True if a rock of this radius at (x, y) would reach onto the soil.
+static bool is_near_soil(const Soil *soil, f32 x, f32 y, f32 radius)
 {
-    const b3Vec3 *points = b3GetHullPoints(hull);
-    const b3HullHalfEdge *edges = b3GetHullEdges(hull);
-    const b3HullFace *faces = b3GetHullFaces(hull);
-    const b3Plane *planes = b3GetHullPlanes(hull);
-    for (i32 f = 0; f < hull->faceCount; f++) {
-        u32 first = faces[f].edge;
-        u32 edge = edges[first].next;
-        u32 next = edges[edge].next;
-        while (next != first) {
-            if (field->vertex_count + 3 > capacity) {
-                return;
-            }
-            u32 v = field->vertex_count;
-            field->vertices[v + 0] = points[edges[first].origin];
-            field->vertices[v + 1] = points[edges[edge].origin];
-            field->vertices[v + 2] = points[edges[next].origin];
-            field->normals[v + 0] = field->normals[v + 1] = field->normals[v + 2] =
-                planes[f].normal;
-            field->vertex_count += 3;
-            edge = next;
-            next = edges[next].next;
-        }
+    if (!soil) {
+        return false;
     }
+    const Terrain *grid = &soil->grid;
+    f32 east = grid->origin_x + (f32)(grid->cols - 1) * grid->spacing;
+    f32 south = grid->origin_y - (f32)(grid->rows - 1) * grid->spacing;
+    return x + radius >= grid->origin_x && x - radius <= east && y - radius <= grid->origin_y &&
+           y + radius >= south;
 }
 
-bool create_boulders(Boulder_Field *field, b3WorldId world, const Terrain *terrain,
-                     const Sim_Config *config, Linear_Allocator *allocator)
+bool create_boulders(Boulder_Field *field, Physics *physics, Ray_Scene *scene,
+                     const Terrain *terrain, const Soil *soil, const Sim_Config *config,
+                     Linear_Allocator *allocator)
 {
     *field = {};
     u32 count = config->boulder_count;
@@ -76,11 +62,7 @@ bool create_boulders(Boulder_Field *field, b3WorldId world, const Terrain *terra
         return false;
     }
 
-    b3BodyDef body_def = b3DefaultBodyDef();
-    body_def.name = "boulders";
-    field->body = b3CreateBody(world, &body_def);
-    b3ShapeDef shape_def = b3DefaultShapeDef();
-    shape_def.baseMaterial.friction = config->terrain_friction;
+    Shape_Material material = {.friction = config->terrain_friction, .group = 0};
 
     Random random = create_random(config->terrain_seed, 4);
     f32 width = (f32)(terrain->cols - 1) * terrain->spacing;
@@ -106,7 +88,7 @@ bool create_boulders(Boulder_Field *field, b3WorldId world, const Terrain *terra
             y = terrain->origin_y - radius - (depth - 2.0f * radius) * get_random_f32(&random);
             f32 dx = x - spawn_x, dy = y - spawn_y;
             f32 clear = BOULDER_SPAWN_CLEARANCE + radius;
-            placed = dx * dx + dy * dy >= clear * clear;
+            placed = dx * dx + dy * dy >= clear * clear && !is_near_soil(soil, x, y, radius);
             // Only on ground level enough for the rock: on a slope steeper than this it would
             // be buried on the uphill side and float on the downhill side.
             if (placed) {
@@ -126,26 +108,36 @@ bool create_boulders(Boulder_Field *field, b3WorldId world, const Terrain *terra
 
         // Sunk about 30% of its height into the lowest ground under it.
         v3 center = {x, y, lowest + 0.4f * axes[2]};
-        b3Quat yaw = make_quat_from_axis_angle(v3{0.0f, 0.0f, 1.0f},
-                                               2.0f * PI_F32 * get_random_f32(&random));
+        Quat yaw = make_quat_from_axis_angle(v3{0.0f, 0.0f, 1.0f},
+                                             2.0f * PI_F32 * get_random_f32(&random));
         v3 points[BOULDER_POINTS];
         for (u32 p = 0; p < BOULDER_POINTS; p++) {
             v3 direction = get_sphere_direction(p, BOULDER_POINTS);
             f32 jitter = 0.75f + 0.5f * get_random_f32(&random);
             v3 local = {direction.x * axes[0] * jitter, direction.y * axes[1] * jitter,
                         direction.z * axes[2] * jitter};
-            points[p] = center + b3RotateVector(yaw, local);
+            points[p] = center + rotate_vector(yaw, local);
         }
-        b3HullData *hull = b3CreateHull(points, BOULDER_POINTS, BOULDER_POINTS);
-        if (!hull) {
+        u32 first_vertex = field->vertex_count;
+        u32 written = make_convex_hull(points, BOULDER_POINTS, field->vertices + first_vertex,
+                                       capacity - first_vertex);
+        if (written == 0) {
             continue;
         }
-        b3CreateHullShape(field->body, &shape_def, hull);
-        u32 first_vertex = field->vertex_count;
-        add_hull_triangles(field, hull, capacity);
-        b3DestroyHull(hull);
-        field->boulders[field->count++] =
-            Boulder{center, radius, first_vertex, field->vertex_count - first_vertex};
+        const v3 *triangles = field->vertices + first_vertex;
+        for (u32 v = 0; v < written; v += 3) {
+            v3 normal =
+                normalize(cross(triangles[v + 1] - triangles[v], triangles[v + 2] - triangles[v]));
+            field->normals[first_vertex + v] = normal;
+            field->normals[first_vertex + v + 1] = normal;
+            field->normals[first_vertex + v + 2] = normal;
+        }
+        // A body each, so the broadphase can pass over rocks nowhere near anything.
+        u32 body = add_body(physics, identity_pose, true);
+        add_hull_shape(physics, body, points, BOULDER_POINTS, &material);
+        add_ray_hull(scene, NULL, triangles, written);
+        field->vertex_count += written;
+        field->boulders[field->count++] = Boulder{center, radius, first_vertex, written};
     }
     log_info("terrain: %u boulders, %.2f to %.2f m", field->count, (f64)smallest, (f64)largest);
     return true;

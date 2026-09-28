@@ -149,7 +149,7 @@ f32 get_terrain_height(const Terrain *terrain, f32 x, f32 y)
     f32 u = col_f - (f32)col;
     f32 v = row_f - (f32)row;
 
-    // Box3D splits each cell along the diagonal from (row + 1, col) to (row, col + 1).
+    // Each cell is split along the diagonal from (row + 1, col) to (row, col + 1).
     const f32 *h = terrain->heights;
     f32 h11 = h[row * terrain->cols + col];
     f32 h12 = h[row * terrain->cols + col + 1];

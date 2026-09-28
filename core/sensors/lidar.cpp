@@ -9,7 +9,8 @@
 #define DEGREES_TO_RADIANS (PI_F32 / 180.0f)
 
 bool create_lidar(Lidar_Sensor *lidar, const Lidar_Config *config, const Robot *robot,
-                  Linear_Allocator *allocator, u64 seed, char *error, u32 error_size)
+                  const Ray_Scene *scene, Linear_Allocator *allocator, u64 seed, char *error,
+                  u32 error_size)
 {
     *lidar = {};
     lidar->config = config;
@@ -26,7 +27,9 @@ bool create_lidar(Lidar_Sensor *lidar, const Lidar_Config *config, const Robot *
         }
     }
     lidar->rays = ALLOCATE_ARRAY(allocator, Lidar_Ray, LIDAR_BATCH);
-    if (!lidar->rays) {
+    lidar->nearby_capacity = scene->solid_capacity;
+    lidar->nearby = ALLOCATE_ARRAY(allocator, u32, max(lidar->nearby_capacity, 1u));
+    if (!lidar->rays || !lidar->nearby) {
         snprintf(error, error_size, "lidar: out of memory for its rays");
         return false;
     }
@@ -77,8 +80,10 @@ void destroy_lidar(Lidar_Sensor *lidar) { destroy_worker_pool(&lidar->pool); }
 
 struct Lidar_Cast {
     const Lidar_Config *config;
-    b3WorldId world;
-    b3Transform pose;
+    const Ray_Scene *scene;
+    const u32 *nearby;
+    u32 nearby_count;
+    Pose pose;
     u64 first_ray;
     Lidar_Ray *rays;
 };
@@ -91,21 +96,31 @@ static void cast_rays(void *context, u32 first, u32 end)
     for (u32 i = first; i < end; i++) {
         Lidar_Ray *ray = &cast->rays[i];
         ray->direction = get_lidar_direction(cast->config, cast->first_ray + i, &ray->line);
-        v3 world_direction = b3RotateVector(cast->pose.q, ray->direction);
-        b3RayResult hit = b3World_CastRayClosest(
-            cast->world, cast->pose.p, max_range * world_direction, b3DefaultQueryFilter());
-        ray->range = hit.hit ? hit.fraction * max_range : -1.0f;
-        ray->incidence = hit.hit ? absolute(b3Dot(hit.normal, world_direction)) : 0.0f;
+        v3 world_direction = rotate_vector(cast->pose.q, ray->direction);
+        Ray_Hit hit = cast_scene_ray(cast->scene, cast->pose.p, world_direction, max_range,
+                                     cast->nearby, cast->nearby_count);
+        ray->range = hit.distance;
+        ray->incidence = hit.distance >= 0.0f ? absolute(dot(hit.normal, world_direction)) : 0.0f;
     }
 }
 
-void update_lidar(Lidar_Sensor *lidar, const Robot *robot, b3WorldId world, u64 sim_time_ns)
+void update_lidar(Lidar_Sensor *lidar, const Robot *robot, const Ray_Scene *scene, u64 sim_time_ns)
 {
     const Lidar_Config *config = lidar->config;
     Lidar_Cast cast = {.config = config,
-                       .world = world,
+                       .scene = scene,
+                       .nearby = lidar->nearby,
                        .pose = get_sensor_pose(robot, &lidar->mount),
                        .rays = lidar->rays};
+    // Only solids within range can be hit.
+    for (u32 i = 0; i < scene->solid_count && cast.nearby_count < lidar->nearby_capacity; i++) {
+        const Solid *solid = &scene->solids[i];
+        f32 reach = config->range[1] + solid->bound;
+        v3 offset = get_solid_center(solid) - cast.pose.p;
+        if (dot(offset, offset) <= reach * reach) {
+            lidar->nearby[cast.nearby_count++] = i;
+        }
+    }
     u64 due = (u64)((f64)sim_time_ns * 1e-9 * (f64)config->points_per_second);
     while (lidar->next_ray < due) {
         u32 count = (u32)min(due - lidar->next_ray, (u64)LIDAR_BATCH);

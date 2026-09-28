@@ -14,7 +14,7 @@
 // One stream (colour or depth): where it looks from, its pinhole model and its target.
 struct Camera_Stream {
     const Camera_Stream_Config *config;
-    b3Transform in_link; // its optical frame in <name>_link
+    Pose in_link; // its optical frame in <name>_link
     Camera_Intrinsics intrinsics;
     RenderTexture2D target; // only when the stream is enabled
     u64 next_frame; // index of the next frame slot

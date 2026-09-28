@@ -1,10 +1,10 @@
-# The Regolith package. flake.nix and default.nix call it with the pinned Box3D source.
+# The Regolith package. flake.nix and default.nix call it with Chrono (nix/packages/chrono).
 { lib
 , stdenv
 , buildRosPackage
 , buildEnv
-  # Box3D v0.1.0 source, pinned in flake.lock (the `box3d` input).
-, box3d-src
+  # Project Chrono: the physics, and the soil (Chrono::Vehicle's SCM).
+, chrono
 , cmake
 , ninja
 , makeWrapper
@@ -87,11 +87,10 @@ mkPackage ({
   };
 
   nativeBuildInputs = [ cmake ninja makeWrapper ];
-  buildInputs = [ raylib expat ];
+  buildInputs = [ raylib expat chrono ];
   propagatedBuildInputs = ros-deps;
 
   cmakeFlags = [
-    "-DBOX3D_SOURCE_DIR=${box3d-src}"
     (lib.cmakeBool "REGOLITH_WITH_ROS" withRos)
     (lib.cmakeBool "REGOLITH_WITH_CAN" withCan)
     "-DREGOLITH_FONT_REGULAR=${fonts}/JetBrainsMono-Regular.ttf"
@@ -117,10 +116,10 @@ mkPackage ({
     ln -s "$out/lib/regolith/regolith" "$out/bin/regolith"
   '';
 
-  passthru = { inherit box3d-src ros-deps fonts; };
+  passthru = { inherit chrono ros-deps fonts; };
 
   meta = {
-    description = "Rover simulator on Raylib and Box3D, with ROS 2 Jazzy and SocketCAN";
+    description = "Rover simulator on Raylib and Project Chrono, with ROS 2 Jazzy and SocketCAN";
     mainProgram = "regolith";
     platforms = lib.platforms.linux;
   };

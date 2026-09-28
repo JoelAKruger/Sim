@@ -1,11 +1,12 @@
 #pragma once
 
-#include <box3d/box3d.h>
+#include "core/physics.h"
 
 #include "core/allocator.h"
+#include "core/raycast.h"
 #include "core/urdf.h"
 
-// A URDF robot as Box3D bodies and joints.
+// A URDF robot as physics bodies and joints.
 //
 // Motors are near-ideal: each driven joint applies up to Robot_Settings::motor_torque, a
 // position-controlled joint moves at Robot_Settings::servo_speed, and
@@ -15,7 +16,7 @@
 // Links joined by fixed joints, or welded by a loop closure, share one body. A chain of
 // three revolute joints about one point through geometry-less dummy links (how URDF
 // writes a ball joint) becomes one spherical joint, and the three angles are recovered
-// from it for joint states. Every other movable joint maps to one Box3D joint.
+// from it for joint states. Every other movable joint maps to one physics joint.
 
 enum Joint_Drive {
     DRIVE_NONE, // passive; URDF dynamics friction, if any, acts as a brake
@@ -27,14 +28,15 @@ enum Joint_Drive {
 // One movable URDF joint as simulated.
 struct Robot_Joint {
     u32 urdf_joint;
-    b3JointId id; // null for a joint folded into a ball
+    i32 physics_joint; // -1 for a joint folded into a ball
     i32 ball; // index into Robot::balls, or -1
     u32 ball_axis; // which of the ball's three angles this is
     Joint_Drive drive; // as driven now
     Joint_Drive default_drive; // as the URDF describes it; what teleop and holding use
     u32 body_a;
     u32 body_b;
-    b3Transform frame_a; // joint frame in body A; its z (x for prismatic) is the axis
+    Pose frame_a; // joint frame in body A; its z (x for prismatic) is the axis
+    Pose frame_b; // the same frame in body B with the joint at zero
     f32 position; // rad or m; continuous joints keep counting past a turn
     f32 velocity; // rad/s or m/s
     f32 effort; // N·m or N applied across the joint in the last step
@@ -44,23 +46,23 @@ struct Robot_Joint {
 
 // A ball joint written in URDF as three revolute joints about one point.
 struct Robot_Ball {
-    b3JointId id;
+    u32 physics_joint;
     u32 body_a;
     u32 body_b;
-    b3Transform frame_a; // the first joint's frame in body A
-    b3Transform frame_b; // the same frame in body B at q = 0
-    b3Matrix3 basis; // columns: the three joint axes in frame A (third made right-handed)
+    Pose frame_a; // the first joint's frame in body A
+    Pose frame_b; // the same frame in body B at q = 0
+    Mat3 basis; // columns: the three joint axes in frame A (third made right-handed)
     f32 third_sign; // -1 when the URDF's third axis points the other way
     u32 joints[3]; // Robot_Joint indices, in chain order
 };
 
 struct Robot_Body {
-    b3BodyId id;
+    u32 physics_body;
     u32 frame_link; // this body's frame is this link's frame
     f32 mass;
-    b3Transform previous; // pose before the last step, for render interpolation
-    b3Transform current;
-    b3Transform start; // pose at spawn, for reset_robot
+    Pose previous; // pose before the last step, for render interpolation
+    Pose current;
+    Pose start; // pose at spawn, for reset_robot
 };
 
 // A wheel that drives the robot, for keyboard teleop.
@@ -78,18 +80,18 @@ struct Robot_Settings {
     f32 friction;
     f32 motor_torque; // N·m (or N) every driven joint's motor can apply
     f32 servo_speed; // rad/s (or m/s) a position-controlled joint moves at; 0 is instant
-    i32 collision_group; // shared negative group when self-collision is off
-    f32 joint_hertz; // joint stiffness; Box3D allows up to a quarter of the substep rate
+    u32 collision_group; // shared by the robot's shapes when self-collision is off (1..14)
     const char *resource_dir; // the URDF file's directory, for relative mesh paths; may be ""
 };
 
 struct Robot {
     Urdf_Model model;
     Robot_Settings settings;
+    Physics *physics; // the bodies and joints are in it
     Robot_Body *bodies;
     u32 body_count;
     i32 *link_body; // per link: body index, or -1 for a dummy link inside a ball joint
-    b3Transform *link_in_body; // per link
+    Pose *link_in_body; // per link
     Robot_Joint *joints;
     u32 joint_count;
     i32 *urdf_joint_index; // per URDF joint: Robot_Joint index, or -1 for fixed joints
@@ -105,8 +107,10 @@ struct Robot {
 void get_rest_bounds(const Urdf_Model *model, v3 *lower, v3 *upper);
 
 // Builds the robot with its root link at spawn. The model's arrays must outlive the robot.
-bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
-                  const Urdf_Model *model, const Robot_Settings *settings, b3Transform spawn,
+// Its collision shapes also go into scene for the sensors, and into the soil's watch (when
+// the physics has soil).
+bool create_robot(Robot *robot, Physics *physics, Ray_Scene *scene, Linear_Allocator *allocator,
+                  const Urdf_Model *model, const Robot_Settings *settings, Pose spawn,
                   f32 step_seconds, char *error, u32 error_size);
 void destroy_robot(Robot *robot);
 
@@ -135,7 +139,11 @@ void drive_robot(Robot *robot, f32 forward_mps, f32 turn_radps);
 // whole motion is scaled down so no wheel moves faster than max_speed over the ground.
 void steer_robot(Robot *robot, f32 drive, f32 turn, f32 max_speed, f32 turn_rate);
 
+// Keyboard control of a position-controlled joint (a digger's): moves its target by direction
+// (-1..1) x rate x seconds, within its limits. Other joints are left alone.
+void nudge_robot_joint(Robot *robot, u32 joint, f32 direction, f32 rate, f32 seconds);
+
 // A link's pose, blending the last two steps by alpha (for rendering).
-b3Transform get_link_pose(const Robot *robot, u32 link, f32 alpha);
+Pose get_link_pose(const Robot *robot, u32 link, f32 alpha);
 
 i32 find_robot_joint(const Robot *robot, const char *name);

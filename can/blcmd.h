@@ -6,7 +6,8 @@
 // Nova's BLCMD motor controllers, as the previous (Unity) simulator implemented them. Only
 // this file and blcmd.cpp know their protocol.
 //
-// Nodes 1..8 (the URDF <ros2_control> canid). A value is a big-endian 16-bit number in
+// Nodes 1..15 except 9, the LED strip (the URDF <ros2_control> canid): Banksia's wheels and
+// pivots are 1..8, a digger's joints 10 and up. A value is a big-endian 16-bit number in
 // bytes 0..1:
 //   3 Drive at Speed     signed, rad/s at the joint = 30 · value / 32767
 //   4 Drive to Position  signed, rad at the joint = π · (value − zero_offset) / 65535,
@@ -22,7 +23,13 @@
 //   cansend can0 054#397D      node 5 (flp): position 0
 
 #define BLCMD_FIRST_NODE 1u
-#define BLCMD_LAST_NODE 8u
+#define BLCMD_LAST_NODE 15u
+#define BLCMD_SKIPPED_NODE 9u // the LED strip
+
+inline bool is_blcmd_node(u32 node)
+{
+    return node >= BLCMD_FIRST_NODE && node <= BLCMD_LAST_NODE && node != BLCMD_SKIPPED_NODE;
+}
 #define BLCMD_FULL_SPEED 30.0f // rad/s at the joint for a speed value of 32767
 #define BLCMD_DEFAULT_ZERO_OFFSET 0x397Du
 

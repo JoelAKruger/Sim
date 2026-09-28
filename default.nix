@@ -12,5 +12,5 @@ in
 
 pkgs.rosPackages.jazzy.callPackage ./nix/packages/regolith {
   inherit withRos withCan;
-  box3d-src = sources.box3d;
+  chrono = pkgs.callPackage ./nix/packages/chrono { };
 }

@@ -18,5 +18,4 @@ in
 {
   nixpkgs = fetch nixpkgs-node;
   nix-ros-overlay = fetch root.nix-ros-overlay;
-  box3d = fetch root.box3d;
 }

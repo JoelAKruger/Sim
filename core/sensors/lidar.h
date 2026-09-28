@@ -1,14 +1,15 @@
 #pragma once
 
 #include "core/config.h"
+#include "core/raycast.h"
 #include "core/sensors/mount.h"
 #include "core/worker_pool.h"
 
-// A Livox Mid-360 fixed to a robot link, made of Box3D ray casts.
+// A Livox Mid-360 fixed to a robot link, made of ray casts into the world's ray scene.
 //
 // Like the real unit it scans continuously: every step casts the rays whose scheduled
 // time fell within it, from the sensor's pose after the step (split across threads, which
-// is safe because nothing changes the Box3D world between steps), and a frame is complete every
+// is safe because nothing moves between steps), and a frame is complete every
 // 1 / rate seconds. The Mid-360's rosette is proprietary, so the directions follow an R2
 // low-discrepancy sequence over azimuth and sin(elevation) instead: it never repeats, one
 // frame covers the whole field of view evenly, and coverage keeps filling in over time.
@@ -56,6 +57,8 @@ struct Lidar_Sensor {
     u64 rays_cast; // in total, for cost measurements
     Lidar_Ray *rays; // one batch
     Worker_Pool pool; // casts a batch across lidar.threads threads
+    u32 *nearby; // the ray scene's solids within range this step
+    u32 nearby_capacity;
 };
 
 // Points a frame can hold at these settings.
@@ -77,12 +80,13 @@ inline Lidar_Point *get_lidar_slot_points(Lidar_Frame_Header *header)
 }
 
 bool create_lidar(Lidar_Sensor *lidar, const Lidar_Config *config, const Robot *robot,
-                  Linear_Allocator *allocator, u64 seed, char *error, u32 error_size);
+                  const Ray_Scene *scene, Linear_Allocator *allocator, u64 seed, char *error,
+                  u32 error_size);
 
 void destroy_lidar(Lidar_Sensor *lidar);
 
 // After a physics step; sim_time_ns is the time after the step.
-void update_lidar(Lidar_Sensor *lidar, const Robot *robot, b3WorldId world, u64 sim_time_ns);
+void update_lidar(Lidar_Sensor *lidar, const Robot *robot, const Ray_Scene *scene, u64 sim_time_ns);
 
 // The latest complete frame, or NULL if none has completed since the last call.
 const Lidar_Frame *take_lidar_frame(Lidar_Sensor *lidar);

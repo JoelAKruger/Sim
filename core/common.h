@@ -3,8 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <box3d/math_functions.h>
-
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -16,9 +14,35 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-// A 3D vector: x, y, z. It is Box3D's own type, so it passes straight to Box3D and has
-// its + - * operators.
-typedef b3Vec3 v3;
+// A 3D vector: x, y, z, with + - * operators. core/math.h has rotations and transforms.
+struct Vec3 {
+    f32 x;
+    f32 y;
+    f32 z;
+};
+typedef Vec3 v3;
+
+inline v3 operator+(v3 a, v3 b) { return v3{a.x + b.x, a.y + b.y, a.z + b.z}; }
+inline v3 operator-(v3 a, v3 b) { return v3{a.x - b.x, a.y - b.y, a.z - b.z}; }
+inline v3 operator-(v3 a) { return v3{-a.x, -a.y, -a.z}; }
+inline v3 operator*(f32 s, v3 a) { return v3{s * a.x, s * a.y, s * a.z}; }
+inline v3 operator*(v3 a, f32 s) { return v3{s * a.x, s * a.y, s * a.z}; }
+inline v3 operator*(v3 a, v3 b) { return v3{a.x * b.x, a.y * b.y, a.z * b.z}; }
+inline v3 &operator+=(v3 &a, v3 b)
+{
+    a = a + b;
+    return a;
+}
+inline v3 &operator-=(v3 &a, v3 b)
+{
+    a = a - b;
+    return a;
+}
+inline v3 &operator*=(v3 &a, f32 s)
+{
+    a = s * a;
+    return a;
+}
 
 #define ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 #define NS_PER_S 1000000000ull

@@ -159,9 +159,10 @@ static void build_node_table(const Robot *robot, const Actuator_Set *actuators)
             !make_blcmd_node(robot, actuator, &can_bridge.nodes[can_bridge.node_count])) {
             const Urdf_Joint *urdf =
                 &robot->model.joints[robot->joints[actuator->joint].urdf_joint];
-            log_warning("can: %s's node id %u isn't a BLCMD address (%u..%u), so it can't be "
-                        "commanded",
-                        urdf->name, actuator->node_id, BLCMD_FIRST_NODE, BLCMD_LAST_NODE);
+            log_warning("can: %s's node id %u isn't a BLCMD address (%u..%u, not %u), so it "
+                        "can't be commanded",
+                        urdf->name, actuator->node_id, BLCMD_FIRST_NODE, BLCMD_LAST_NODE,
+                        BLCMD_SKIPPED_NODE);
             continue;
         }
         can_bridge.node_count++;

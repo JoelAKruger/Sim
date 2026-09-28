@@ -22,15 +22,15 @@
 
 static Vector3 convert_vector3(v3 v) { return Vector3{v.x, v.y, v.z}; }
 
-static Quaternion convert_quaternion(b3Quat q) { return Quaternion{q.v.x, q.v.y, q.v.z, q.s}; }
+static Quaternion convert_quaternion(Quat q) { return Quaternion{q.v.x, q.v.y, q.v.z, q.s}; }
 
-static Matrix make_transform_matrix(b3Transform transform)
+static Matrix make_transform_matrix(Pose transform)
 {
     return MatrixMultiply(QuaternionToMatrix(convert_quaternion(transform.q)),
                           MatrixTranslate(transform.p.x, transform.p.y, transform.p.z));
 }
 
-static Matrix make_pose_matrix(b3Transform previous, b3Transform current, f32 alpha, Vector3 scale)
+static Matrix make_pose_matrix(Pose previous, Pose current, f32 alpha, Vector3 scale)
 {
     Vector3 position = Vector3Lerp(convert_vector3(previous.p), convert_vector3(current.p), alpha);
     Quaternion rotation =
@@ -47,39 +47,31 @@ static f32 get_sample_height(const Terrain *terrain, i32 row, i32 col)
     return terrain->heights[row * (i32)terrain->cols + col];
 }
 
-// One tile of the terrain as an indexed mesh, triangulated exactly as Box3D does.
-static Mesh build_terrain_tile(const Terrain *terrain, u32 first_row, u32 first_col, u32 cell_rows,
-                               u32 cell_cols)
+// A tile's vertices: positions, normals and colours, from the grid as it is now.
+static void fill_tile_vertices(Mesh *mesh, const Terrain *grid, u32 first_row, u32 first_col,
+                               u32 cell_rows, u32 cell_cols)
 {
     u32 stride = cell_cols + 1;
-    Mesh mesh = {};
-    mesh.vertexCount = (int)((cell_rows + 1) * stride);
-    mesh.triangleCount = (int)(cell_rows * cell_cols * 2);
-    mesh.vertices = (float *)MemAlloc((u32)mesh.vertexCount * 3 * sizeof(float));
-    mesh.normals = (float *)MemAlloc((u32)mesh.vertexCount * 3 * sizeof(float));
-    mesh.colors = (unsigned char *)MemAlloc((u32)mesh.vertexCount * 4);
-    mesh.indices = (unsigned short *)MemAlloc((u32)mesh.triangleCount * 3 * sizeof(u16));
-
     for (u32 r = 0; r <= cell_rows; r++) {
         for (u32 c = 0; c <= cell_cols; c++) {
             i32 row = (i32)(first_row + r);
             i32 col = (i32)(first_col + c);
             u32 v = r * stride + c;
-            mesh.vertices[v * 3 + 0] = terrain->origin_x + (f32)col * terrain->spacing;
-            mesh.vertices[v * 3 + 1] = terrain->origin_y - (f32)row * terrain->spacing;
-            mesh.vertices[v * 3 + 2] = get_sample_height(terrain, row, col);
+            mesh->vertices[v * 3 + 0] = grid->origin_x + (f32)col * grid->spacing;
+            mesh->vertices[v * 3 + 1] = grid->origin_y - (f32)row * grid->spacing;
+            mesh->vertices[v * 3 + 2] = get_sample_height(grid, row, col);
 
             // Central differences; y decreases as the row index increases.
-            f32 dz_dx = (get_sample_height(terrain, row, col + 1) -
-                         get_sample_height(terrain, row, col - 1)) /
-                        (2.0f * terrain->spacing);
-            f32 dz_dy = (get_sample_height(terrain, row - 1, col) -
-                         get_sample_height(terrain, row + 1, col)) /
-                        (2.0f * terrain->spacing);
+            f32 dz_dx =
+                (get_sample_height(grid, row, col + 1) - get_sample_height(grid, row, col - 1)) /
+                (2.0f * grid->spacing);
+            f32 dz_dy =
+                (get_sample_height(grid, row - 1, col) - get_sample_height(grid, row + 1, col)) /
+                (2.0f * grid->spacing);
             Vector3 normal = Vector3Normalize(Vector3{-dz_dx, -dz_dy, 1.0f});
-            mesh.normals[v * 3 + 0] = normal.x;
-            mesh.normals[v * 3 + 1] = normal.y;
-            mesh.normals[v * 3 + 2] = normal.z;
+            mesh->normals[v * 3 + 0] = normal.x;
+            mesh->normals[v * 3 + 1] = normal.y;
+            mesh->normals[v * 3 + 2] = normal.z;
 
             // Regolith grey with a little per-sample variation so flat ground reads as
             // a surface rather than a flat colour.
@@ -88,18 +80,37 @@ static Mesh build_terrain_tile(const Terrain *terrain, u32 first_row, u32 first_
             hash *= 0x2c1b3c6du;
             hash ^= hash >> 12;
             u8 grey = (u8)(142 + (hash & 15));
-            mesh.colors[v * 4 + 0] = grey;
-            mesh.colors[v * 4 + 1] = (u8)(grey - 3);
-            mesh.colors[v * 4 + 2] = (u8)(grey - 8);
-            mesh.colors[v * 4 + 3] = 255;
+            mesh->colors[v * 4 + 0] = grey;
+            mesh->colors[v * 4 + 1] = (u8)(grey - 3);
+            mesh->colors[v * 4 + 2] = (u8)(grey - 8);
+            mesh->colors[v * 4 + 3] = 255;
         }
     }
+}
 
-    // Box3D's two triangles per cell: (11, 21, 12) and (22, 12, 21), where 11 is the
-    // cell's north-west sample. Both wind counter-clockwise seen from above.
+// One tile of a height grid as an indexed mesh, triangulated exactly as the physics does.
+// Cells under hole (the soil, which draws itself) are left out. A dynamic tile's vertices
+// can be updated later.
+static Mesh build_terrain_tile(const Terrain *grid, const Soil *hole, u32 first_row, u32 first_col,
+                               u32 cell_rows, u32 cell_cols, bool dynamic)
+{
+    u32 stride = cell_cols + 1;
+    Mesh mesh = {};
+    mesh.vertexCount = (int)((cell_rows + 1) * stride);
+    mesh.vertices = (float *)MemAlloc((u32)mesh.vertexCount * 3 * sizeof(float));
+    mesh.normals = (float *)MemAlloc((u32)mesh.vertexCount * 3 * sizeof(float));
+    mesh.colors = (unsigned char *)MemAlloc((u32)mesh.vertexCount * 4);
+    mesh.indices = (unsigned short *)MemAlloc(cell_rows * cell_cols * 6 * sizeof(u16));
+    fill_tile_vertices(&mesh, grid, first_row, first_col, cell_rows, cell_cols);
+
+    // Two triangles per cell: (11, 21, 12) and (22, 12, 21), where 11 is the cell's
+    // north-west sample. Both wind counter-clockwise seen from above.
     u32 index = 0;
     for (u32 r = 0; r < cell_rows; r++) {
         for (u32 c = 0; c < cell_cols; c++) {
+            if (hole && is_soil_cell(hole, first_row + r, first_col + c)) {
+                continue;
+            }
             u16 v11 = (u16)(r * stride + c);
             u16 v12 = (u16)(v11 + 1);
             u16 v21 = (u16)(v11 + stride);
@@ -110,8 +121,8 @@ static Mesh build_terrain_tile(const Terrain *terrain, u32 first_row, u32 first_
             }
         }
     }
-
-    UploadMesh(&mesh, false);
+    mesh.triangleCount = (int)(index / 3);
+    UploadMesh(&mesh, dynamic);
     return mesh;
 }
 
@@ -134,7 +145,7 @@ static Camera3D make_camera_from_orbit(const Orbit_Camera *orbit)
 // Returns true if the user panned, which ends following the robot.
 // The mouse belongs to the 3D view unless it is over the UI. A drag belongs to wherever it
 // started, so orbiting past the panel keeps orbiting and a press on the panel never does.
-static bool handle_orbit_input(Orbit_Camera *orbit, const Terrain *terrain, f32 frame_seconds,
+static bool handle_orbit_input(Orbit_Camera *orbit, const World *world, f32 frame_seconds,
                                bool over_ui, bool *drag_in_view)
 {
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) {
@@ -170,7 +181,7 @@ static bool handle_orbit_input(Orbit_Camera *orbit, const Terrain *terrain, f32 
         pan_x -= key_speed;
     orbit->target = Vector3Add(orbit->target, Vector3Scale(right, pan_x));
     orbit->target = Vector3Add(orbit->target, Vector3Scale(forward, pan_y));
-    orbit->target.z = get_terrain_height(terrain, orbit->target.x, orbit->target.y);
+    orbit->target.z = get_world_ground_height(world, orbit->target.x, orbit->target.y);
     return pan_x != 0.0f || pan_y != 0.0f;
 }
 
@@ -343,7 +354,7 @@ static void load_robot_meshes(Viewer *viewer, const World *world, Linear_Allocat
 static void draw_robot_visual(const Viewer *viewer, const Robot *robot, const Viewer_Visual *visual,
                               f32 alpha, Material *material)
 {
-    b3Transform pose = b3MulTransforms(get_link_pose(robot, visual->link, alpha), visual->origin);
+    Pose pose = multiply_poses(get_link_pose(robot, visual->link, alpha), visual->origin);
     material->maps[MATERIAL_MAP_DIFFUSE].color = visual->color;
     DrawMesh(viewer->meshes[visual->mesh].mesh, *material,
              MatrixMultiply(visual->correction, make_transform_matrix(pose)));
@@ -433,6 +444,31 @@ static void build_boulder_mesh(Viewer *viewer, const Boulder_Field *field)
     viewer->has_boulder_mesh = true;
 }
 
+// Re-uploads the soil tiles that have changed since they were last drawn: their positions
+// and normals (the colours stay).
+static void update_soil_tiles(Viewer *viewer, const World *world)
+{
+    const Soil *soil = &world->soil;
+    const Terrain *grid = &soil->grid;
+    for (u32 tile = 0; tile < viewer->soil_tile_count; tile++) {
+        if (viewer->soil_tile_versions[tile] == soil->tile_versions[tile]) {
+            continue;
+        }
+        viewer->soil_tile_versions[tile] = soil->tile_versions[tile];
+        u32 first_row = tile / soil->tile_cols * SOIL_TILE_CELLS;
+        u32 first_col = tile % soil->tile_cols * SOIL_TILE_CELLS;
+        u32 cell_rows = min((u32)SOIL_TILE_CELLS, grid->rows - 1 - first_row);
+        u32 cell_cols = min((u32)SOIL_TILE_CELLS, grid->cols - 1 - first_col);
+        Mesh *mesh = &viewer->soil_tiles[tile];
+        fill_tile_vertices(mesh, grid, first_row, first_col, cell_rows, cell_cols);
+        i32 size = mesh->vertexCount * 3 * (i32)sizeof(float);
+        UpdateMeshBuffer(*mesh, 0, mesh->vertices, size, 0); // raylib: 0 positions, 2 normals
+        UpdateMeshBuffer(*mesh, 2, mesh->normals, size, 0);
+        viewer->soil_tile_bounds[tile] =
+            get_terrain_tile_bounds(grid, first_row, first_col, cell_rows, cell_cols);
+    }
+}
+
 bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocator)
 {
     *viewer = {};
@@ -462,6 +498,7 @@ bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocat
     build_boulder_mesh(viewer, &world->boulders);
 
     const Terrain *terrain = &world->terrain;
+    const Soil *soil = world->has_soil ? &world->soil : NULL;
     u32 tile_rows = (terrain->rows - 1 + TILE_CELLS - 1) / TILE_CELLS;
     u32 tile_cols = (terrain->cols - 1 + TILE_CELLS - 1) / TILE_CELLS;
     viewer->terrain_tiles = ALLOCATE_ARRAY(allocator, Mesh, tile_rows * tile_cols);
@@ -477,13 +514,36 @@ bool create_viewer(Viewer *viewer, const World *world, Linear_Allocator *allocat
             u32 cell_cols = min((u32)TILE_CELLS, terrain->cols - 1 - first_col);
             viewer->terrain_tile_bounds[viewer->terrain_tile_count] =
                 get_terrain_tile_bounds(terrain, first_row, first_col, cell_rows, cell_cols);
-            viewer->terrain_tiles[viewer->terrain_tile_count++] =
-                build_terrain_tile(terrain, first_row, first_col, cell_rows, cell_cols);
+            viewer->terrain_tiles[viewer->terrain_tile_count++] = build_terrain_tile(
+                terrain, soil, first_row, first_col, cell_rows, cell_cols, false);
         }
+    }
+    // The soil's tiles match its change-counting tiles, so a changed one is re-uploaded.
+    if (soil) {
+        u32 count = soil->tile_rows * soil->tile_cols;
+        viewer->soil_tiles = ALLOCATE_ARRAY(allocator, Mesh, count);
+        viewer->soil_tile_bounds = ALLOCATE_ARRAY(allocator, Vector4, count);
+        viewer->soil_tile_versions = ALLOCATE_ARRAY(allocator, u32, count);
+        if (!viewer->soil_tiles || !viewer->soil_tile_bounds || !viewer->soil_tile_versions) {
+            return false;
+        }
+        const Terrain *grid = &soil->grid;
+        for (u32 tile = 0; tile < count; tile++) {
+            u32 first_row = tile / soil->tile_cols * SOIL_TILE_CELLS;
+            u32 first_col = tile % soil->tile_cols * SOIL_TILE_CELLS;
+            u32 cell_rows = min((u32)SOIL_TILE_CELLS, grid->rows - 1 - first_row);
+            u32 cell_cols = min((u32)SOIL_TILE_CELLS, grid->cols - 1 - first_col);
+            viewer->soil_tile_bounds[tile] =
+                get_terrain_tile_bounds(grid, first_row, first_col, cell_rows, cell_cols);
+            viewer->soil_tiles[tile] =
+                build_terrain_tile(grid, NULL, first_row, first_col, cell_rows, cell_cols, true);
+            viewer->soil_tile_versions[tile] = soil->tile_versions[tile];
+        }
+        viewer->soil_tile_count = count;
     }
     viewer->box = GenMeshCube(1.0f, 1.0f, 1.0f);
 
-    viewer->camera.target = Vector3{0.0f, 0.0f, get_terrain_height(terrain, 0.0f, 0.0f)};
+    viewer->camera.target = Vector3{0.0f, 0.0f, get_world_ground_height(world, 0.0f, 0.0f)};
     viewer->camera.yaw = -2.4f;
     viewer->camera.pitch = 0.45f;
     viewer->camera.distance = 18.0f;
@@ -498,6 +558,9 @@ void destroy_viewer(Viewer *viewer)
     unload_robot_meshes(viewer);
     for (u32 i = 0; i < viewer->terrain_tile_count; i++) {
         UnloadMesh(viewer->terrain_tiles[i]);
+    }
+    for (u32 i = 0; i < viewer->soil_tile_count; i++) {
+        UnloadMesh(viewer->soil_tiles[i]);
     }
     UnloadMesh(viewer->box);
     if (viewer->has_boulder_mesh) {
@@ -520,6 +583,9 @@ void draw_scene(const Viewer *viewer, const World *world, f32 alpha, Material *m
     material->maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     for (u32 i = 0; i < viewer->terrain_tile_count; i++) {
         DrawMesh(viewer->terrain_tiles[i], *material, MatrixIdentity());
+    }
+    for (u32 i = 0; i < viewer->soil_tile_count; i++) {
+        DrawMesh(viewer->soil_tiles[i], *material, MatrixIdentity());
     }
     if (viewer->has_boulder_mesh) {
         set_shading_surface(shading, SURFACE_ROCK);
@@ -564,6 +630,14 @@ static void draw_shadow_casters(void *context, Material *material, Vector3 cente
         }
         DrawMesh(viewer->terrain_tiles[i], *material, MatrixIdentity());
     }
+    for (u32 i = 0; i < viewer->soil_tile_count; i++) {
+        Vector4 bounds = viewer->soil_tile_bounds[i];
+        Vector3 offset = Vector3Subtract(Vector3{bounds.x, bounds.y, bounds.z}, center);
+        Vector3 across = Vector3Subtract(offset, Vector3Scale(sun, Vector3DotProduct(offset, sun)));
+        if (Vector3Length(across) <= 1.415f * radius + bounds.w) {
+            DrawMesh(viewer->soil_tiles[i], *material, MatrixIdentity());
+        }
+    }
     if (viewer->has_boulder_mesh) {
         DrawMesh(viewer->boulder_mesh, *material, MatrixIdentity());
     }
@@ -592,11 +666,11 @@ static void draw_lidar_points(const World *world)
     if (!frame) {
         return;
     }
-    b3Transform pose = get_sensor_pose(&world->robot, &world->lidar.mount);
+    Pose pose = get_sensor_pose(&world->robot, &world->lidar.mount);
     const f32 size = 0.02f;
     for (u32 i = 0; i < frame->count; i++) {
         const Lidar_Point *point = &frame->points[i];
-        v3 position = b3TransformPoint(pose, v3{point->x, point->y, point->z});
+        v3 position = transform_point(pose, v3{point->x, point->y, point->z});
         f32 height = min(max((position.z - pose.p.z + 2.0f) / 4.0f, 0.0f), 1.0f);
         Color color = ColorFromHSV(240.0f * (1.0f - height), 0.9f, 1.0f);
         Vector3 p = convert_vector3(position);
@@ -693,10 +767,10 @@ static void draw_top_bar(Viewer *viewer, const World *world, const Frame_Stats *
     // Fixed-width values, so the numbers don't jitter as they change.
     f32 speed = 0.0f;
     if (world->has_robot) {
-        // Speed from the last step's motion, so the viewer needn't ask Box3D.
+        // Speed from the last step's motion, so the viewer needn't ask the physics.
         const Robot_Body *root =
             &world->robot.bodies[world->robot.link_body[world->robot.model.root]];
-        speed = b3Length(b3Sub(root->current.p, root->previous.p)) / world->step_seconds;
+        speed = get_length(root->current.p - root->previous.p) / world->step_seconds;
     }
     char values[5][32];
     snprintf(values[0], sizeof(values[0]), "%7.2f s", (f64)get_sim_time_ns(world) * 1e-9);
@@ -799,6 +873,16 @@ static void draw_side_panel(Viewer *viewer, const World *world, const Frame_Stat
                          theme->text_dim);
         }
         y += ROW_HEIGHT;
+        if (world->bucket_joint >= 0) {
+            // How hard the soil pushes back on the bucket: whether it's cutting.
+            draw_ui_text(ui, UI_FONT_BODY, "Bucket soil load", x, y + body_offset, theme->text);
+            char load[32];
+            snprintf(load, sizeof(load), "%.0f N", (f64)world->bucket_soil_force);
+            f32 load_width = measure_ui_text(ui, UI_FONT_BODY, load);
+            draw_ui_text(ui, UI_FONT_BODY, load, x + width - load_width, y + body_offset,
+                         theme->text);
+            y += ROW_HEIGHT;
+        }
     }
     y += 14.0f;
 
@@ -876,8 +960,9 @@ static void draw_hint_bar(Viewer *viewer)
     DrawRectangle(0, (i32)top, (i32)width, 1, theme->border);
     const char *hints[][2] = {
         {"RMB", "orbit"}, {"MMB/WASD", "pan"}, {"Wheel", "zoom"}, {"Arrows", "drive"},
-        {"M", "mode"},    {"R", "reset"},      {"P", "pause"},    {"N", "step"},
-        {"F", "follow"},  {"C", "collisions"}, {"L", "lidar"},    {"Space", "box"},
+        {"I/K", "boom"},  {"U/O", "bucket"},   {"M", "mode"},     {"R", "reset"},
+        {"P", "pause"},   {"N", "step"},       {"F", "follow"},   {"C", "collisions"},
+        {"L", "lidar"},   {"Space", "box"},
     };
     f32 x = PANEL_PADDING;
     f32 y = top + 0.5f * (HINT_BAR_HEIGHT - get_ui_font_size(ui, UI_FONT_SMALL));
@@ -936,9 +1021,10 @@ Viewer_Actions draw_frame(Viewer *viewer, const World *world, f32 alpha, const F
     actions.quit = WindowShouldClose();
 
     begin_ui(&viewer->ui);
+    update_soil_tiles(viewer, world);
     f32 frame_seconds = GetFrameTime();
-    if (handle_orbit_input(&viewer->camera, &world->terrain, frame_seconds,
-                           is_mouse_over_ui(&viewer->ui), &viewer->drag_in_view)) {
+    if (handle_orbit_input(&viewer->camera, world, frame_seconds, is_mouse_over_ui(&viewer->ui),
+                           &viewer->drag_in_view)) {
         viewer->follow = false;
     }
     if (IsKeyPressed(KEY_F)) {
@@ -952,11 +1038,13 @@ Viewer_Actions draw_frame(Viewer *viewer, const World *world, f32 alpha, const F
     }
     if (viewer->follow && world->has_robot) {
         // Locked to the robot: a lagging camera makes stops and turns look springy.
-        b3Transform root = get_link_pose(&world->robot, world->robot.model.root, alpha);
+        Pose root = get_link_pose(&world->robot, world->robot.model.root, alpha);
         viewer->camera.target = convert_vector3(root.p);
     }
     actions.drive = (f32)IsKeyDown(KEY_UP) - (f32)IsKeyDown(KEY_DOWN);
     actions.turn = (f32)IsKeyDown(KEY_LEFT) - (f32)IsKeyDown(KEY_RIGHT);
+    actions.boom = (f32)IsKeyDown(KEY_K) - (f32)IsKeyDown(KEY_I);
+    actions.bucket = (f32)IsKeyDown(KEY_U) - (f32)IsKeyDown(KEY_O);
     if (IsKeyPressed(KEY_SPACE)) {
         actions.drop_box = true;
         actions.drop_position =

@@ -66,12 +66,13 @@ inline bool is_camera_enabled(const Camera_Config *camera)
 }
 
 // Every tunable the core reads. Plain data, so any front end (a config file, ROS
-// parameters) can fill it without knowing anything about Box3D.
+// parameters) can fill it without knowing anything about the physics engine.
 struct Sim_Config {
     v3 gravity; // m/s², world frame (z up)
     u32 physics_hz;
-    u32 substeps;
-    u32 workers; // Box3D worker threads; 1 is single-threaded
+    u32 substeps; // Chrono steps per physics step
+    u32 solver_iterations; // most solver iterations per Chrono step
+    u32 workers; // Chrono threads; 1 is single-threaded
 
     char terrain_heightmap[CONFIG_STRING_SIZE]; // PGM file; empty for procedural terrain
     f32 terrain_height; // m spanned by a heightmap's full pixel range
@@ -83,6 +84,22 @@ struct Sim_Config {
     u32 boulder_count; // fixed rocks scattered over the terrain; 0 for none
     f32 boulder_size[2]; // m, smallest and largest
     f32 terrain_friction;
+
+    // Deformable soil (Chrono SCM) around the spawn point: Bekker-Wong pressure-sinkage,
+    // Mohr-Coulomb and Janosi-Hanamoto shear.
+    bool soil_enabled;
+    f32 soil_size[2]; // m along x and y
+    f32 soil_spacing; // m between soil samples
+    f32 soil_bekker_kphi; // Pa/m^n
+    f32 soil_bekker_kc; // Pa/m^(n-1)
+    f32 soil_bekker_n;
+    f32 soil_cohesion; // Pa
+    f32 soil_friction_angle; // degrees
+    f32 soil_janosi_shear; // m
+    f32 soil_elastic_stiffness; // Pa/m
+    f32 soil_damping; // Pa·s/m
+    bool soil_bulldozing; // displaced soil heaps up beside ruts
+    f32 soil_erosion_angle; // degrees
 
     char robot_urdf[CONFIG_STRING_SIZE]; // URDF file; empty to wait for /robot_description
     Spawn_Pose robot_spawn; // dropped onto the terrain
@@ -97,6 +114,9 @@ struct Sim_Config {
 
     f32 teleop_speed; // m/s at full keyboard drive
     f32 teleop_turn_rate; // rad/s at full keyboard turn
+    char teleop_boom_joint[CONFIG_STRING_SIZE]; // digger joints for the keyboard, if present
+    char teleop_bucket_joint[CONFIG_STRING_SIZE];
+    f32 teleop_tool_rate; // rad/s (or m/s) the keys move a digger joint's target
 
     Lidar_Config lidar;
     Imu_Config imu;

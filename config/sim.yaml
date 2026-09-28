@@ -8,8 +8,9 @@ regolith:
     world:
       gravity: [0.0, 0.0, -9.81]   # m/s², world frame, z up. Lunar: [0, 0, -1.62]
       physics_hz: 240              # fixed physics steps per simulated second
-      substeps: 4                  # Box3D solver substeps per step
-      workers: 1                   # Box3D worker threads; 1 is single-threaded
+      substeps: 4                  # Chrono steps per physics step
+      solver_iterations: 100       # most solver iterations per Chrono step
+      workers: 1                   # Chrono threads; 1 is single-threaded and repeatable
     terrain:
       heightmap: ""                # PGM heightmap, north up; empty for procedural terrain
       height_m: 10.0               # m spanned by the heightmap's full pixel range
@@ -21,6 +22,20 @@ regolith:
       boulders: 400                # fixed rocks scattered over the terrain (from terrain.seed); 0 none
       boulder_size_m: [0.1, 1.2]   # smallest and largest; most are small
       friction: 0.8                # Coulomb friction coefficient of the ground
+    soil:
+      enabled: true                # a patch of deformable soil (Chrono SCM) around robot.spawn
+      size_m: [20.0, 20.0]         # m along x and y, rounded to whole terrain cells
+      spacing_m: 0.02              # m between soil samples, adjusted to divide terrain.spacing_m
+      bekker_kphi: 2e+06           # Pa/m^n, Bekker frictional modulus
+      bekker_kc: 0.0               # Pa/m^(n-1), Bekker cohesive modulus
+      bekker_n: 1.1                # Bekker sinkage exponent
+      cohesion_pa: 0.0             # Pa, Mohr-Coulomb cohesion; dry sand has none
+      friction_deg: 30.0           # degrees, Mohr-Coulomb internal friction angle
+      janosi_m: 0.01               # m, Janosi-Hanamoto shear deformation modulus
+      elastic_stiffness: 2e+08     # Pa/m, stiffness before it yields; above bekker_kphi
+      damping: 30000.0             # Pa·s/m, vertical damping
+      bulldozing: true             # displaced soil heaps up beside ruts and cuts
+      erosion_angle_deg: 40.0      # degrees; heaped soil steeper than this slides down
     robot:
       urdf: ""                     # URDF file; empty to take /robot_description
       spawn: [0.0, 0.0, 0.0]       # x, y (m) and yaw (rad), dropped onto the terrain
@@ -35,6 +50,9 @@ regolith:
     teleop:
       speed_mps: 0.6               # m/s at full keyboard drive; no wheel goes faster over the ground
       turn_rate: 0.8               # rad/s turning on the spot; arcs are scaled to teleop.speed_mps
+      boom_joint: "boom_joint"     # digger joint that I/K raise and lower in keyboard mode, if the robot has it
+      bucket_joint: "bucket_joint" # digger joint that U/O curl and open in keyboard mode, if the robot has it
+      tool_rate: 0.5               # rad/s (or m/s) the keys move the digger joints' targets
     lidar:
       enabled: true                # simulate the Livox Mid-360
       frame: "livox_frame"         # URDF link the LiDAR is on (x forward, z up); also the frame_id

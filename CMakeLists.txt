@@ -18,18 +18,21 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
-set(BOX3D_SOURCE_DIR "$ENV{BOX3D_SOURCE_DIR}" CACHE PATH "Box3D v0.1.0 source tree")
-if(NOT EXISTS "${BOX3D_SOURCE_DIR}/CMakeLists.txt")
-  message(FATAL_ERROR "BOX3D_SOURCE_DIR must point at a Box3D v0.1.0 source tree (nix-shell sets it)")
+# Project Chrono: the multibody physics, and Chrono::Vehicle for its SCM deformable soil.
+# No COMPONENTS: Chrono's config would then also demand its vehicle model library, which
+# nix/packages/chrono doesn't build. The exported targets are there either way.
+find_package(Chrono 10 CONFIG REQUIRED QUIET)
+if(NOT TARGET Chrono::Chrono_vehicle)
+  message(FATAL_ERROR "Chrono was built without Chrono::Vehicle (CH_ENABLE_MODULE_VEHICLE)")
 endif()
-add_subdirectory(${BOX3D_SOURCE_DIR} ${CMAKE_BINARY_DIR}/box3d EXCLUDE_FROM_ALL)
 
 find_package(Threads REQUIRED)
 find_package(raylib REQUIRED)
 find_package(EXPAT REQUIRED)
 
-# -ffp-contract=off matches Box3D, so our float maths is reproducible across machines.
-# ros/ros_bridge.cpp builds without -fno-exceptions and -fno-rtti, which rclcpp needs.
+# -ffp-contract=off keeps our float maths reproducible across machines.
+# ros/ros_bridge.cpp and core/physics.cpp build without -fno-exceptions and -fno-rtti, which
+# rclcpp and Chrono need.
 set(REGOLITH_FLAGS -Wall -Wextra -Wshadow -Wno-missing-field-initializers -ffp-contract=off)
 set(REGOLITH_STRICT_FLAGS ${REGOLITH_FLAGS} -fno-exceptions -fno-rtti)
 
@@ -47,13 +50,19 @@ add_library(regolith_core STATIC
   core/world.cpp
   core/boulders.cpp
   core/worker_pool.cpp
+  core/physics.cpp
+  core/raycast.cpp
+  core/soil.cpp
   core/sensors/imu.cpp
   core/sensors/lidar.cpp
   core/sensors/mount.cpp
 )
 target_include_directories(regolith_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(regolith_core PUBLIC box3d::box3d Threads::Threads m PRIVATE EXPAT::EXPAT)
+target_link_libraries(regolith_core PUBLIC Threads::Threads m PRIVATE EXPAT::EXPAT Chrono::Chrono_vehicle)
 target_compile_options(regolith_core PRIVATE ${REGOLITH_STRICT_FLAGS})
+# The one file that includes Chrono. Later options win, so these undo -fno-exceptions and
+# -fno-rtti for it alone.
+set_source_files_properties(core/physics.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions;-frtti")
 
 # The viewer's font (JetBrains Mono), copied into the binary so nothing is loaded at run
 # time. Without one the viewer falls back to Raylib's built-in font.
@@ -131,7 +140,8 @@ foreach(suite shared_state config robot urdf world blcmd led_strip sensors)
 endforeach()
 add_test(NAME shared_state COMMAND test_shared_state)
 add_test(NAME config COMMAND test_config ${CMAKE_CURRENT_SOURCE_DIR}/config/sim.yaml)
-add_test(NAME robot COMMAND test_robot ${CMAKE_CURRENT_SOURCE_DIR}/robots/banksia.urdf)
+add_test(NAME robot COMMAND test_robot ${CMAKE_CURRENT_SOURCE_DIR}/robots/banksia.urdf
+  ${CMAKE_CURRENT_SOURCE_DIR}/robots/banksia_digger.urdf)
 add_test(NAME urdf COMMAND test_urdf ${CMAKE_CURRENT_SOURCE_DIR}/robots/banksia.urdf)
 add_test(NAME world COMMAND test_world)
 add_test(NAME blcmd COMMAND test_blcmd)

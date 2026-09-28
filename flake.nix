@@ -1,5 +1,5 @@
 {
-  description = "Regolith: rover simulator on Raylib and Box3D, with ROS 2 Jazzy and SocketCAN";
+  description = "Regolith: rover simulator on Raylib and Project Chrono, with ROS 2 Jazzy and SocketCAN";
 
   # ROS packages come prebuilt from the overlay's cache (nix asks before using it).
   nixConfig = {
@@ -12,20 +12,16 @@
     nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
     # The nixpkgs the overlay is tested with, which is what ros.cachix.org is built against.
     nixpkgs.follows = "nix-ros-overlay/nixpkgs";
-    box3d = {
-      url = "github:erincatto/box3d/v0.1.0";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, nix-ros-overlay, box3d }:
+  outputs = { self, nixpkgs, nix-ros-overlay }:
     let
       system = "x86_64-linux";
       pkgs = import ./nix/pkgs.nix { inherit nixpkgs nix-ros-overlay system; };
       regolith = { withRos ? true, withCan ? true }:
         pkgs.rosPackages.jazzy.callPackage ./nix/packages/regolith {
           inherit withRos withCan;
-          box3d-src = box3d;
+          chrono = pkgs.callPackage ./nix/packages/chrono { };
         };
 
       # `nix run`: the sim with the bundled settings and Banksia, unless the arguments

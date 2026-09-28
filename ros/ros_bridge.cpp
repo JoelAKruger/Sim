@@ -362,7 +362,7 @@ static void publish_camera_frame(Camera_Frame_Header *frame, sensor_msgs::msg::I
 }
 
 static void add_static_transform(tf2_msgs::msg::TFMessage *message, const char *parent,
-                                 const char *child, b3Transform transform)
+                                 const char *child, Pose transform)
 {
     geometry_msgs::msg::TransformStamped stamped;
     stamped.header.frame_id = parent;
@@ -392,10 +392,10 @@ static void publish_camera_transforms(const Camera_Config *camera)
     make_camera_frame_name(camera->name, "_color_frame", color, sizeof(color));
     make_camera_frame_name(camera->name, "_color_optical_frame", color_optical,
                            sizeof(color_optical));
-    const b3Transform identity = {{0.0f, 0.0f, 0.0f}, {{0.0f, 0.0f, 0.0f}, 1.0f}};
-    b3Transform color_offset = identity;
+    const Pose identity = {{0.0f, 0.0f, 0.0f}, {{0.0f, 0.0f, 0.0f}, 1.0f}};
+    Pose color_offset = identity;
     color_offset.p = v3{camera->color_offset[0], camera->color_offset[1], camera->color_offset[2]};
-    b3Transform optical = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
+    Pose optical = get_optical_transform(v3{0.0f, 0.0f, 0.0f});
 
     tf2_msgs::msg::TFMessage message;
     if (camera->depth.enabled) {

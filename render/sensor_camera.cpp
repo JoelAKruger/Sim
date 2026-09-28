@@ -113,10 +113,10 @@ static void advance_stream(Camera_Stream *stream, const World *world, Camera_Fra
 }
 
 // A Raylib camera looking along +z of an optical frame, with -y up.
-static Camera3D make_optical_camera(b3Transform pose, const Camera_Intrinsics *intrinsics)
+static Camera3D make_optical_camera(Pose pose, const Camera_Intrinsics *intrinsics)
 {
-    v3 forward = b3RotateVector(pose.q, v3{0.0f, 0.0f, 1.0f});
-    v3 up = b3RotateVector(pose.q, v3{0.0f, -1.0f, 0.0f});
+    v3 forward = rotate_vector(pose.q, v3{0.0f, 0.0f, 1.0f});
+    v3 up = rotate_vector(pose.q, v3{0.0f, -1.0f, 0.0f});
     Camera3D camera = {};
     camera.position = Vector3{pose.p.x, pose.p.y, pose.p.z};
     camera.target = Vector3{pose.p.x + forward.x, pose.p.y + forward.y, pose.p.z + forward.z};
@@ -129,8 +129,8 @@ static Camera3D make_optical_camera(b3Transform pose, const Camera_Intrinsics *i
 static Camera3D make_stream_camera(const Sensor_Camera *camera, const Camera_Stream *stream,
                                    const World *world)
 {
-    b3Transform link_pose = get_sensor_pose(&world->robot, &camera->mount);
-    return make_optical_camera(b3MulTransforms(link_pose, stream->in_link), &stream->intrinsics);
+    Pose link_pose = get_sensor_pose(&world->robot, &camera->mount);
+    return make_optical_camera(multiply_poses(link_pose, stream->in_link), &stream->intrinsics);
 }
 
 // Reads a render target back, top row first (GL stores it bottom-up).

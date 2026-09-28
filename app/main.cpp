@@ -15,6 +15,9 @@
 // Beyond this many steps in one frame the sim is not keeping up. It then runs slower
 // than real time rather than spiralling ever further behind.
 #define MAX_STEPS_PER_FRAME 64
+// With a window, a frame stops stepping after this long, so the view stays responsive (and
+// the sim runs slower than real time) when steps are slow, as they are on the soil.
+#define FRAME_STEP_BUDGET_NS (30ull * 1000000ull)
 
 struct Args {
     bool headless;
@@ -278,7 +281,7 @@ static void drop_starting_boxes(World *world)
         }
         placed[i][0] = x;
         placed[i][1] = y;
-        v3 position = {x, y, get_terrain_height(&world->terrain, x, y) + 0.2f};
+        v3 position = {x, y, get_world_ground_height(world, x, y) + 0.2f};
         add_box(world, position, half_extents, 400.0f, colors[i]);
     }
 }
@@ -383,6 +386,9 @@ int main(int argc, char **argv)
     bool first_frame = true;
     f32 teleop_drive = 0.0f; // -1..1, from the viewer's arrow keys
     f32 teleop_turn = 0.0f;
+    f32 teleop_boom = 0.0f; // -1..1, from the viewer's I and K
+    f32 teleop_bucket = 0.0f; // -1..1, from U and O
+    u32 last_frame_steps = 0; // physics steps the last frame ran
     u64 last_ignored_ns = 0; // when a CAN command last arrived in keyboard mode
     u64 previous_ns = get_time_ns();
     u64 last_log_ns = previous_ns;
@@ -412,19 +418,36 @@ int main(int argc, char **argv)
         if (world.has_robot && world.control_mode == CONTROL_KEYBOARD) {
             steer_robot(&world.robot, teleop_drive, teleop_turn, config.teleop_speed,
                         config.teleop_turn_rate);
+            // The digger's targets move with the sim time the last frame stepped.
+            f32 frame_sim_seconds = (f32)((f64)last_frame_steps * step_seconds);
+            if (world.boom_joint >= 0) {
+                nudge_robot_joint(&world.robot, (u32)world.boom_joint, teleop_boom,
+                                  config.teleop_tool_rate, frame_sim_seconds);
+            }
+            if (world.bucket_joint >= 0) {
+                nudge_robot_joint(&world.robot, (u32)world.bucket_joint, teleop_bucket,
+                                  config.teleop_tool_rate, frame_sim_seconds);
+            }
         }
         const Status_Light *light = (const Status_Light *)read_triple_buffer(&shared.status_light);
         if (light) {
             world.status_light = *light;
         }
 
+        u64 frame_steps_start_ns = get_time_ns();
+        last_frame_steps = 0;
         for (u32 i = 0; i < steps; i++) {
             u64 step_start_ns = get_time_ns();
             run_step(&world, &shared, &last_ignored_ns);
             pace.window_step_ns += get_time_ns() - step_start_ns;
             pace.window_steps++;
+            last_frame_steps++;
             if (args.max_steps && world.step_count >= args.max_steps) {
                 request_quit(&shared);
+                break;
+            }
+            if (!args.headless && get_time_ns() - frame_steps_start_ns > FRAME_STEP_BUDGET_NS) {
+                accumulator = 0.0; // the rest of this frame's sim time is dropped
                 break;
             }
         }
@@ -465,6 +488,8 @@ int main(int argc, char **argv)
             }
             teleop_drive = actions.drive;
             teleop_turn = actions.turn;
+            teleop_boom = actions.boom;
+            teleop_bucket = actions.bucket;
             if (actions.drop_box) {
                 v3 half_extents = {0.4f, 0.4f, 0.4f};
                 add_box(&world, actions.drop_position, half_extents, 400.0f, 0xeb9632);

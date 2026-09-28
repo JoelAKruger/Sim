@@ -22,9 +22,9 @@ bool find_sensor_mount(const Robot *robot, const char *frame, const char *key, S
     return true;
 }
 
-b3Transform get_sensor_pose(const Robot *robot, const Sensor_Mount *mount)
+Pose get_sensor_pose(const Robot *robot, const Sensor_Mount *mount)
 {
-    return b3MulTransforms(robot->bodies[mount->body].current, mount->in_body);
+    return multiply_poses(robot->bodies[mount->body].current, mount->in_body);
 }
 
 static bool is_sensor_unmounted(const Robot *robot, const char *frame, const char *sensor)

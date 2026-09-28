@@ -3,17 +3,15 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/math.h"
 #include "core/stl.h"
 
 #define DUMMY_MASS 1e-3f // kg; lighter links with no geometry are kinematic dummies
-#define CYLINDER_SIDES 32 // Box3D's maximum for a cylinder hull
-#define MESH_HULL_VERTICES 64
 #define DEFAULT_MASS 0.1f // kg for a body with no inertial at all
-
-static const b3Transform identity_transform = {{0.0f, 0.0f, 0.0f}, {{0.0f, 0.0f, 0.0f}, 1.0f}};
+#define SOIL_DOMAIN_MARGIN 0.01f // m around a body's shapes where soil can touch it
 
 static void set_error(char *error, u32 error_size, const char *format, ...)
     __attribute__((format(printf, 3, 4)));
@@ -37,15 +35,15 @@ static bool is_revolute(Urdf_Joint_Type type)
 }
 
 // Every link's pose in the root link's frame with all joints at zero.
-static b3Transform get_rest_pose(const Urdf_Model *model, b3Transform *poses, bool *done, u32 link)
+static Pose get_rest_pose(const Urdf_Model *model, Pose *poses, bool *done, u32 link)
 {
     if (!done[link]) {
-        b3Transform pose = identity_transform;
+        Pose pose = identity_pose;
         i32 joint = model->links[link].parent_joint;
         if (joint >= 0) {
             const Urdf_Joint *parent_joint = &model->joints[joint];
-            pose = b3MulTransforms(get_rest_pose(model, poses, done, parent_joint->parent),
-                                   parent_joint->origin);
+            pose = multiply_poses(get_rest_pose(model, poses, done, parent_joint->parent),
+                                  parent_joint->origin);
         }
         poses[link] = pose;
         done[link] = true;
@@ -53,7 +51,7 @@ static b3Transform get_rest_pose(const Urdf_Model *model, b3Transform *poses, bo
     return poses[link];
 }
 
-static void compute_rest_poses(const Urdf_Model *model, b3Transform *poses, bool *done)
+static void compute_rest_poses(const Urdf_Model *model, Pose *poses, bool *done)
 {
     memset(done, 0, model->link_count * sizeof(bool));
     for (u32 i = 0; i < model->link_count; i++) {
@@ -82,7 +80,7 @@ static void grow_bounds(v3 *lower, v3 *upper, v3 point)
 }
 
 // Bounds of one collision shape placed at pose, in the pose's parent frame.
-static void get_shape_bounds(const Urdf_Geometry *geometry, b3Transform pose, v3 *lower, v3 *upper)
+static void get_shape_bounds(const Urdf_Geometry *geometry, Pose pose, v3 *lower, v3 *upper)
 {
     switch (geometry->type) {
     case URDF_GEOMETRY_BOX:
@@ -90,25 +88,25 @@ static void get_shape_bounds(const Urdf_Geometry *geometry, b3Transform pose, v3
             v3 local = {(corner & 1 ? 0.5f : -0.5f) * geometry->size.x,
                         (corner & 2 ? 0.5f : -0.5f) * geometry->size.y,
                         (corner & 4 ? 0.5f : -0.5f) * geometry->size.z};
-            grow_bounds(lower, upper, b3TransformPoint(pose, local));
+            grow_bounds(lower, upper, transform_point(pose, local));
         }
         break;
     case URDF_GEOMETRY_CYLINDER: {
-        v3 axis = b3RotateVector(pose.q, v3{0.0f, 0.0f, 1.0f});
+        v3 axis = rotate_vector(pose.q, v3{0.0f, 0.0f, 1.0f});
         v3 extent = {geometry->radius * sqrtf(max(0.0f, 1.0f - axis.x * axis.x)),
                      geometry->radius * sqrtf(max(0.0f, 1.0f - axis.y * axis.y)),
                      geometry->radius * sqrtf(max(0.0f, 1.0f - axis.z * axis.z))};
         for (i32 end = -1; end <= 1; end += 2) {
-            v3 centre = b3MulAdd(pose.p, 0.5f * (f32)end * geometry->length, axis);
-            grow_bounds(lower, upper, b3Sub(centre, extent));
-            grow_bounds(lower, upper, b3Add(centre, extent));
+            v3 centre = pose.p + (0.5f * (f32)end * geometry->length) * axis;
+            grow_bounds(lower, upper, centre - extent);
+            grow_bounds(lower, upper, centre + extent);
         }
         break;
     }
     case URDF_GEOMETRY_SPHERE: {
         v3 extent = {geometry->radius, geometry->radius, geometry->radius};
-        grow_bounds(lower, upper, b3Sub(pose.p, extent));
-        grow_bounds(lower, upper, b3Add(pose.p, extent));
+        grow_bounds(lower, upper, pose.p - extent);
+        grow_bounds(lower, upper, pose.p + extent);
         break;
     }
     default:
@@ -119,7 +117,7 @@ static void get_shape_bounds(const Urdf_Geometry *geometry, b3Transform pose, v3
 
 void get_rest_bounds(const Urdf_Model *model, v3 *lower, v3 *upper)
 {
-    static b3Transform poses[4096];
+    static Pose poses[4096];
     static bool done[4096];
     *lower = v3{INFINITY, INFINITY, INFINITY};
     *upper = v3{-INFINITY, -INFINITY, -INFINITY};
@@ -130,8 +128,8 @@ void get_rest_bounds(const Urdf_Model *model, v3 *lower, v3 *upper)
     compute_rest_poses(model, poses, done);
     for (u32 i = 0; i < model->collision_count; i++) {
         const Urdf_Shape *shape = &model->collisions[i];
-        get_shape_bounds(&shape->geometry, b3MulTransforms(poses[shape->link], shape->origin),
-                         lower, upper);
+        get_shape_bounds(&shape->geometry, multiply_poses(poses[shape->link], shape->origin), lower,
+                         upper);
     }
     if (lower->x > upper->x) {
         *lower = *upper = v3{0.0f, 0.0f, 0.0f};
@@ -180,9 +178,9 @@ static bool is_dummy_link(const Urdf_Model *model, u32 link, const bool *closure
            get_only_child_joint(model, link) >= 0;
 }
 
-static bool is_pure_twist(b3Transform origin)
+static bool is_pure_twist(Pose origin)
 {
-    return b3Length(origin.p) < 1e-5f && b3Length(origin.q.v) < 1e-4f;
+    return get_length(origin.p) < 1e-5f && get_length(origin.q.v) < 1e-4f;
 }
 
 // Joint j1 starts a ball joint if j1, j2 and j3 are revolute, chained through two dummy
@@ -205,8 +203,8 @@ static bool find_ball_chain(const Urdf_Model *model, u32 j1, const bool *closure
     v3 u1 = joints[j1].axis;
     v3 u2 = joints[j2].axis;
     v3 u3 = joints[j3].axis;
-    if (absolute(b3Dot(u1, u2)) > 1e-3f || absolute(b3Dot(u1, u3)) > 1e-3f ||
-        absolute(b3Dot(u2, u3)) > 1e-3f) {
+    if (absolute(dot(u1, u2)) > 1e-3f || absolute(dot(u1, u3)) > 1e-3f ||
+        absolute(dot(u2, u3)) > 1e-3f) {
         return false;
     }
     chain[0] = j1;
@@ -217,25 +215,31 @@ static bool find_ball_chain(const Urdf_Model *model, u32 j1, const bool *closure
 
 // Physically possible inertia: positive definite, and each principal moment no larger
 // than the sum of the other two (true of the diagonal in any frame).
-static bool is_inertia_plausible(b3Matrix3 inertia)
+static bool is_inertia_plausible(Mat3 inertia)
 {
     f32 ixx = inertia.cx.x, iyy = inertia.cy.y, izz = inertia.cz.z;
     f32 ixy = inertia.cy.x;
     f32 slack = 1e-6f * (ixx + iyy + izz);
-    bool positive = ixx > 0.0f && ixx * iyy - ixy * ixy > 0.0f && b3Det(inertia) > 0.0f;
+    bool positive = ixx > 0.0f && ixx * iyy - ixy * ixy > 0.0f && get_determinant(inertia) > 0.0f;
     bool triangle =
         ixx + iyy + slack >= izz && ixx + izz + slack >= iyy && iyy + izz + slack >= ixx;
     return positive && triangle;
 }
 
-static b3Matrix3 make_diagonal(f32 value)
+static Mat3 make_diagonal(f32 value)
 {
-    b3Matrix3 m = {};
+    Mat3 m = {};
     m.cx.x = m.cy.y = m.cz.z = value;
     return m;
 }
 
-static void set_body_mass(Robot *robot, u32 body, const u32 *members, u32 member_count)
+struct Mass_Data {
+    f32 mass;
+    v3 center; // in the body frame
+    Mat3 inertia; // about the center, in the body's axes
+};
+
+static void set_robot_body_mass(Robot *robot, u32 body, const u32 *members, u32 member_count)
 {
     const Urdf_Model *model = &robot->model;
     f32 mass = 0.0f;
@@ -245,32 +249,32 @@ static void set_body_mass(Robot *robot, u32 body, const u32 *members, u32 member
         if (!inertial->present || inertial->mass <= 0.0f) {
             continue;
         }
-        v3 centre = b3TransformPoint(robot->link_in_body[members[m]], inertial->origin.p);
+        v3 centre = transform_point(robot->link_in_body[members[m]], inertial->origin.p);
         mass += inertial->mass;
-        weighted = b3MulAdd(weighted, inertial->mass, centre);
+        weighted += inertial->mass * centre;
     }
 
     const char *name = model->links[robot->bodies[body].frame_link].name;
-    b3MassData data = {};
+    Mass_Data data = {};
     if (mass <= 0.0f) {
         log_warning("robot: %s has no mass in the URDF; using %.1f kg", name, (f64)DEFAULT_MASS);
         data.mass = DEFAULT_MASS;
         data.inertia = make_diagonal(1e-3f);
     } else {
         data.mass = mass;
-        data.center = b3MulSV(1.0f / mass, weighted);
+        data.center = (1.0f / mass) * weighted;
         for (u32 m = 0; m < member_count; m++) {
             const Urdf_Inertial *inertial = &model->links[members[m]].inertial;
             if (!inertial->present || inertial->mass <= 0.0f) {
                 continue;
             }
-            b3Transform frame = b3MulTransforms(robot->link_in_body[members[m]], inertial->origin);
-            b3Matrix3 rotation = b3MakeMatrixFromQuat(frame.q);
-            b3Matrix3 rotated =
-                b3MulMM(b3MulMM(rotation, inertial->inertia), b3Transpose(rotation));
-            v3 offset = b3Sub(frame.p, data.center);
-            data.inertia =
-                b3AddMM(data.inertia, b3AddMM(rotated, b3Steiner(inertial->mass, offset)));
+            Pose frame = multiply_poses(robot->link_in_body[members[m]], inertial->origin);
+            Mat3 rotation = make_matrix_from_quat(frame.q);
+            Mat3 rotated = multiply_matrices(multiply_matrices(rotation, inertial->inertia),
+                                             transpose_matrix(rotation));
+            v3 offset = frame.p - data.center;
+            data.inertia = add_matrices(
+                data.inertia, add_matrices(rotated, get_offset_inertia(inertial->mass, offset)));
         }
         if (!is_inertia_plausible(data.inertia)) {
             f32 mean = (absolute(data.inertia.cx.x) + absolute(data.inertia.cy.y) +
@@ -283,47 +287,53 @@ static void set_body_mass(Robot *robot, u32 body, const u32 *members, u32 member
         }
     }
     robot->bodies[body].mass = data.mass;
-    b3Body_SetMassData(robot->bodies[body].id, data);
+    set_body_mass(robot->physics, robot->bodies[body].physics_body, data.mass, data.center,
+                  data.inertia);
 }
 
-static void add_collision_shape(Robot *robot, u32 body, const Urdf_Shape *shape)
+// A collision shape's corners and extremes in its body's frame, for sizing the body's soil
+// domain.
+static void grow_body_bounds(v3 *lower, v3 *upper, Pose pose, const Urdf_Geometry *geometry,
+                             const v3 *points, u32 point_count)
+{
+    if (geometry->type == URDF_GEOMETRY_MESH) {
+        for (u32 i = 0; i < point_count; i++) {
+            grow_bounds(lower, upper, points[i]);
+        }
+    } else {
+        get_shape_bounds(geometry, pose, lower, upper);
+    }
+}
+
+// Adds a collision shape to the physics and the ray scene, and grows the body's bounds.
+static void add_collision_shape(Robot *robot, Ray_Scene *scene, u32 body, const Urdf_Shape *shape,
+                                v3 *lower, v3 *upper)
 {
     const Urdf_Geometry *geometry = &shape->geometry;
-    b3Transform pose = b3MulTransforms(robot->link_in_body[shape->link], shape->origin);
-    b3BodyId id = robot->bodies[body].id;
-    b3ShapeDef def = b3DefaultShapeDef();
-    def.density = 0.0f; // mass comes from the URDF inertials
-    def.updateBodyMass = false;
-    def.baseMaterial.friction = robot->settings.friction;
-    if (!robot->model.self_collide) {
-        def.filter.groupIndex = robot->settings.collision_group;
-    }
+    Pose pose = multiply_poses(robot->link_in_body[shape->link], shape->origin);
+    Robot_Body *b = &robot->bodies[body];
+    u32 id = b->physics_body;
+    Shape_Material material = {
+        .friction = robot->settings.friction,
+        .group = robot->model.self_collide ? 0 : robot->settings.collision_group,
+    };
 
     switch (geometry->type) {
     case URDF_GEOMETRY_BOX: {
-        b3BoxHull hull = b3MakeTransformedBoxHull(0.5f * geometry->size.x, 0.5f * geometry->size.y,
-                                                  0.5f * geometry->size.z, pose);
-        b3CreateHullShape(id, &def, &hull.base);
+        v3 half = 0.5f * geometry->size;
+        add_box_shape(robot->physics, id, pose, half, &material);
+        add_ray_box(scene, &b->current, pose, half);
         break;
     }
-    case URDF_GEOMETRY_CYLINDER: {
-        // Box3D's cylinder runs along y; URDF's along z.
-        b3HullData *along_y = b3CreateCylinder(geometry->length, geometry->radius,
-                                               -0.5f * geometry->length, CYLINDER_SIDES);
-        b3Transform y_to_z = {{0.0f, 0.0f, 0.0f},
-                              make_quat_from_axis_angle(v3{1.0f, 0.0f, 0.0f}, 0.5f * B3_PI)};
-        b3HullData *placed =
-            b3CloneAndTransformHull(along_y, b3MulTransforms(pose, y_to_z), v3{1.0f, 1.0f, 1.0f});
-        b3CreateHullShape(id, &def, placed);
-        b3DestroyHull(placed);
-        b3DestroyHull(along_y);
+    case URDF_GEOMETRY_CYLINDER:
+        // URDF's cylinder is centred on its origin along z, as the physics' is.
+        add_cylinder_shape(robot->physics, id, pose, geometry->radius, geometry->length, &material);
+        add_ray_cylinder(scene, &b->current, pose, geometry->radius, geometry->length);
         break;
-    }
-    case URDF_GEOMETRY_SPHERE: {
-        b3Sphere sphere = {pose.p, geometry->radius};
-        b3CreateSphereShape(id, &def, &sphere);
+    case URDF_GEOMETRY_SPHERE:
+        add_sphere_shape(robot->physics, id, pose.p, geometry->radius, &material);
+        add_ray_sphere(scene, &b->current, pose.p, geometry->radius);
         break;
-    }
     case URDF_GEOMETRY_MESH: {
         char path[URDF_PATH_SIZE];
         char message[256];
@@ -331,11 +341,11 @@ static void add_collision_shape(Robot *robot, u32 body, const Urdf_Shape *shape)
         if (!resolve_resource_path(geometry->mesh, robot->settings.resource_dir, path,
                                    sizeof(path))) {
             log_warning("robot: collision mesh %s not found; shape skipped", geometry->mesh);
-            break;
+            return;
         }
         if (!load_stl(&mesh, path, message, sizeof(message))) {
             log_warning("robot: %s; shape skipped", message);
-            break;
+            return;
         }
         u32 count = mesh.triangle_count * 3;
         v3 *points = (v3 *)mesh.normals; // reuse: same size, no longer needed
@@ -343,21 +353,28 @@ static void add_collision_shape(Robot *robot, u32 body, const Urdf_Shape *shape)
             v3 local = {mesh.positions[i * 3] * geometry->scale.x,
                         mesh.positions[i * 3 + 1] * geometry->scale.y,
                         mesh.positions[i * 3 + 2] * geometry->scale.z};
-            points[i] = b3TransformPoint(pose, local);
+            points[i] = transform_point(pose, local);
         }
-        b3HullData *hull = b3CreateHull(points, (int)count, MESH_HULL_VERTICES);
-        if (hull) {
-            b3CreateHullShape(id, &def, hull);
-            b3DestroyHull(hull);
+        // A hull of n points has at most 2n - 4 triangles.
+        u32 capacity = 6 * count;
+        v3 *hull = (v3 *)malloc(capacity * sizeof(v3));
+        u32 hull_count = hull ? make_convex_hull(points, count, hull, capacity) : 0;
+        if (hull_count > 0) {
+            // The hull's corners are all the physics needs of the mesh.
+            add_hull_shape(robot->physics, id, hull, hull_count, &material);
+            add_ray_hull(scene, &b->current, hull, hull_count);
+            grow_body_bounds(lower, upper, pose, geometry, hull, hull_count);
         } else {
             log_warning("robot: could not make a convex hull from %s", path);
         }
+        free(hull);
         free_stl(&mesh);
-        break;
+        return;
     }
     default:
-        break;
+        return;
     }
+    grow_body_bounds(lower, upper, pose, geometry, NULL, 0);
 }
 
 // The most a joint's motor applies in a drive mode: the full motor for velocity and position
@@ -370,8 +387,7 @@ static f32 get_motor_limit(const Robot *robot, const Robot_Joint *joint, Joint_D
     return robot->model.joints[joint->urdf_joint].friction;
 }
 
-static bool create_joint(Robot *robot, b3WorldId world, Robot_Joint *joint, char *error,
-                         u32 error_size)
+static bool create_joint(Robot *robot, Robot_Joint *joint, char *error, u32 error_size)
 {
     const Urdf_Model *model = &robot->model;
     const Urdf_Joint *urdf = &model->joints[joint->urdf_joint];
@@ -389,50 +405,35 @@ static bool create_joint(Robot *robot, b3WorldId world, Robot_Joint *joint, char
         return true;
     }
 
-    // Box3D turns revolute joints about the frame's z and slides prismatic joints along x.
+    // Revolute joints turn about the frame's z; prismatic joints slide along its x.
     v3 reference = urdf->type == URDF_JOINT_PRISMATIC ? v3{1.0f, 0.0f, 0.0f} : v3{0.0f, 0.0f, 1.0f};
-    b3Transform axis_frame = {{0.0f, 0.0f, 0.0f},
-                              b3ComputeQuatBetweenUnitVectors(reference, urdf->axis)};
-    joint->frame_a = b3MulTransforms(robot->link_in_body[urdf->parent],
-                                     b3MulTransforms(urdf->origin, axis_frame));
-    b3Transform frame_b = b3MulTransforms(robot->link_in_body[urdf->child], axis_frame);
+    Pose axis_frame = {{0.0f, 0.0f, 0.0f}, make_quat_between(reference, urdf->axis)};
+    joint->frame_a =
+        multiply_poses(robot->link_in_body[urdf->parent], multiply_poses(urdf->origin, axis_frame));
+    joint->frame_b = multiply_poses(robot->link_in_body[urdf->child], axis_frame);
 
-    f32 max_effort = get_motor_limit(robot, joint, joint->drive);
-    bool motor = max_effort > 0.0f;
+    Joint_Def def = {
+        .kind = urdf->type == URDF_JOINT_PRISMATIC ? JOINT_PRISMATIC : JOINT_REVOLUTE,
+        .body_a = robot->bodies[joint->body_a].physics_body,
+        .body_b = robot->bodies[joint->body_b].physics_body,
+        .frame_a = joint->frame_a,
+        .frame_b = joint->frame_b,
+        .limited = false,
+        .lower = urdf->lower,
+        .upper = urdf->upper,
+    };
     if (urdf->type == URDF_JOINT_PRISMATIC) {
-        b3PrismaticJointDef def = b3DefaultPrismaticJointDef();
-        def.base.bodyIdA = robot->bodies[joint->body_a].id;
-        def.base.bodyIdB = robot->bodies[joint->body_b].id;
-        def.base.localFrameA = joint->frame_a;
-        def.base.localFrameB = frame_b;
-        def.base.constraintHertz = robot->settings.joint_hertz;
-        def.enableLimit = urdf->has_limits && urdf->lower < urdf->upper;
-        def.lowerTranslation = urdf->lower;
-        def.upperTranslation = urdf->upper;
-        def.enableMotor = motor;
-        def.maxMotorForce = max_effort;
-        joint->id = b3CreatePrismaticJoint(world, &def);
+        def.limited = urdf->has_limits && urdf->lower < urdf->upper;
     } else {
-        b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
-        def.base.bodyIdA = robot->bodies[joint->body_a].id;
-        def.base.bodyIdB = robot->bodies[joint->body_b].id;
-        def.base.localFrameA = joint->frame_a;
-        def.base.localFrameB = frame_b;
-        def.base.constraintHertz = robot->settings.joint_hertz;
         // A range of a full turn or more is no limit at all, and a stop at ±π would jam.
-        def.enableLimit = urdf->type == URDF_JOINT_REVOLUTE && urdf->has_limits &&
-                          urdf->upper - urdf->lower < 2.0f * PI_F32 - 0.01f;
-        def.lowerAngle = urdf->lower;
-        def.upperAngle = urdf->upper;
-        def.enableMotor = motor;
-        def.maxMotorTorque = max_effort;
-        joint->id = b3CreateRevoluteJoint(world, &def);
+        def.limited = urdf->type == URDF_JOINT_REVOLUTE && urdf->has_limits &&
+                      urdf->upper - urdf->lower < 2.0f * PI_F32 - 0.01f;
     }
+    joint->physics_joint = (i32)add_joint(robot->physics, &def);
     return true;
 }
 
-static void create_ball(Robot *robot, b3WorldId world, Robot_Ball *ball, const u32 *chain,
-                        const b3Transform *rest)
+static void create_ball(Robot *robot, Robot_Ball *ball, const u32 *chain, const Pose *rest)
 {
     const Urdf_Model *model = &robot->model;
     const Urdf_Joint *first = &model->joints[chain[0]];
@@ -440,26 +441,27 @@ static void create_ball(Robot *robot, b3WorldId world, Robot_Ball *ball, const u
     u32 child = model->joints[chain[2]].child;
     ball->body_a = (u32)robot->link_body[parent];
     ball->body_b = (u32)robot->link_body[child];
-    ball->frame_a = b3MulTransforms(robot->link_in_body[parent], first->origin);
-    b3Transform pivot = b3MulTransforms(rest[parent], first->origin);
-    b3Transform body_b_rest = rest[robot->bodies[ball->body_b].frame_link];
-    ball->frame_b = b3InvMulTransforms(body_b_rest, pivot);
+    ball->frame_a = multiply_poses(robot->link_in_body[parent], first->origin);
+    Pose pivot = multiply_poses(rest[parent], first->origin);
+    Pose body_b_rest = rest[robot->bodies[ball->body_b].frame_link];
+    ball->frame_b = inverse_multiply_poses(body_b_rest, pivot);
 
     v3 u1 = first->axis;
     v3 u2 = model->joints[chain[1]].axis;
-    v3 u3 = b3Cross(u1, u2);
+    v3 u3 = cross(u1, u2);
     ball->basis.cx = u1;
     ball->basis.cy = u2;
     ball->basis.cz = u3;
-    ball->third_sign = b3Dot(u3, model->joints[chain[2]].axis) >= 0.0f ? 1.0f : -1.0f;
+    ball->third_sign = dot(u3, model->joints[chain[2]].axis) >= 0.0f ? 1.0f : -1.0f;
 
-    b3SphericalJointDef def = b3DefaultSphericalJointDef();
-    def.base.bodyIdA = robot->bodies[ball->body_a].id;
-    def.base.bodyIdB = robot->bodies[ball->body_b].id;
-    def.base.localFrameA = ball->frame_a;
-    def.base.localFrameB = ball->frame_b;
-    def.base.constraintHertz = robot->settings.joint_hertz;
-    ball->id = b3CreateSphericalJoint(world, &def);
+    Joint_Def def = {
+        .kind = JOINT_SPHERICAL,
+        .body_a = robot->bodies[ball->body_a].physics_body,
+        .body_b = robot->bodies[ball->body_b].physics_body,
+        .frame_a = ball->frame_a,
+        .frame_b = ball->frame_b,
+    };
+    ball->physics_joint = add_joint(robot->physics, &def);
 }
 
 static f32 get_wheel_radius(const Urdf_Model *model, u32 link)
@@ -475,7 +477,7 @@ static f32 get_wheel_radius(const Urdf_Model *model, u32 link)
     return radius;
 }
 
-static void find_wheels(Robot *robot, const b3Transform *rest)
+static void find_wheels(Robot *robot, const Pose *rest)
 {
     const Urdf_Model *model = &robot->model;
     for (u32 i = 0; i < robot->joint_count; i++) {
@@ -492,8 +494,8 @@ static void find_wheels(Robot *robot, const b3Transform *rest)
         }
         // The joint axis is in the child frame. Positive spin rolls forward (+x) when the
         // contact point below the axle moves backwards: (axis × z) · x > 0.
-        v3 axis = b3RotateVector(rest[urdf->child].q, urdf->axis);
-        f32 forward = b3Cross(axis, v3{0.0f, 0.0f, 1.0f}).x;
+        v3 axis = rotate_vector(rest[urdf->child].q, urdf->axis);
+        f32 forward = cross(axis, v3{0.0f, 0.0f, 1.0f}).x;
         Robot_Wheel wheel = {
             .joint = i,
             .forward = rest[urdf->child].p.x,
@@ -508,7 +510,7 @@ static void find_wheels(Robot *robot, const b3Transform *rest)
         i32 steer = model->links[urdf->parent].parent_joint;
         if (steer >= 0 && robot->urdf_joint_index[steer] >= 0) {
             const Urdf_Joint *steer_urdf = &model->joints[steer];
-            v3 steer_axis = b3RotateVector(rest[steer_urdf->child].q, steer_urdf->axis);
+            v3 steer_axis = rotate_vector(rest[steer_urdf->child].q, steer_urdf->axis);
             if (robot->joints[robot->urdf_joint_index[steer]].drive == DRIVE_POSITION &&
                 absolute(steer_axis.z) > 0.7f) {
                 wheel.steer_joint = robot->urdf_joint_index[steer];
@@ -519,18 +521,19 @@ static void find_wheels(Robot *robot, const b3Transform *rest)
     }
 }
 
-bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
-                  const Urdf_Model *model, const Robot_Settings *settings, b3Transform spawn,
+bool create_robot(Robot *robot, Physics *physics, Ray_Scene *scene, Linear_Allocator *allocator,
+                  const Urdf_Model *model, const Robot_Settings *settings, Pose spawn,
                   f32 step_seconds, char *error, u32 error_size)
 {
     *robot = {};
     robot->model = *model;
     robot->settings = *settings;
+    robot->physics = physics;
     robot->step_seconds = step_seconds;
     u32 links = model->link_count;
     u32 joints = model->joint_count;
 
-    b3Transform *rest = ALLOCATE_ARRAY(allocator, b3Transform, links);
+    Pose *rest = ALLOCATE_ARRAY(allocator, Pose, links);
     bool *done = ALLOCATE_ARRAY(allocator, bool, links);
     bool *closure_link = ALLOCATE_ARRAY(allocator, bool, links);
     bool *dummy = ALLOCATE_ARRAY(allocator, bool, links);
@@ -540,7 +543,7 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
     u32 *chains = ALLOCATE_ARRAY(allocator, u32, max(joints, 1u) * 3);
     robot->bodies = ALLOCATE_ARRAY(allocator, Robot_Body, links);
     robot->link_body = ALLOCATE_ARRAY(allocator, i32, links);
-    robot->link_in_body = ALLOCATE_ARRAY(allocator, b3Transform, links);
+    robot->link_in_body = ALLOCATE_ARRAY(allocator, Pose, links);
     robot->joints = ALLOCATE_ARRAY(allocator, Robot_Joint, max(joints, 1u));
     robot->urdf_joint_index = ALLOCATE_ARRAY(allocator, i32, max(joints, 1u));
     robot->balls = ALLOCATE_ARRAY(allocator, Robot_Ball, max(joints / 3, 1u));
@@ -609,26 +612,14 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
         if (!dummy[i]) {
             robot->link_body[i] = robot->link_body[find_root(set, i)];
             u32 frame = robot->bodies[robot->link_body[i]].frame_link;
-            robot->link_in_body[i] = b3InvMulTransforms(rest[frame], rest[i]);
+            robot->link_in_body[i] = inverse_multiply_poses(rest[frame], rest[i]);
         }
     }
 
     for (u32 b = 0; b < robot->body_count; b++) {
         Robot_Body *body = &robot->bodies[b];
-        b3Transform pose = b3MulTransforms(spawn, rest[body->frame_link]);
-        bool spins = false;
-        i32 parent_joint = model->links[body->frame_link].parent_joint;
-        if (parent_joint >= 0 && model->joints[parent_joint].type == URDF_JOINT_CONTINUOUS) {
-            spins = true;
-        }
-        b3BodyDef def = b3DefaultBodyDef();
-        def.type = b3_dynamicBody;
-        def.position = pose.p;
-        def.rotation = pose.q;
-        def.name = model->links[body->frame_link].name;
-        def.enableSleep = false; // commands must always take effect
-        def.allowFastRotation = spins;
-        body->id = b3CreateBody(world, &def);
+        Pose pose = multiply_poses(spawn, rest[body->frame_link]);
+        body->physics_body = add_body(robot->physics, pose, false);
         body->current = body->previous = body->start = pose;
 
         u32 member_count = 0;
@@ -637,16 +628,26 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
                 members[member_count++] = i;
             }
         }
+        v3 lower = {INFINITY, INFINITY, INFINITY};
+        v3 upper = {-INFINITY, -INFINITY, -INFINITY};
         for (u32 m = 0; m < member_count; m++) {
             const Urdf_Link *link = &model->links[members[m]];
             for (u32 c = 0; c < link->collision_count; c++) {
-                add_collision_shape(robot, b, &model->collisions[link->first_collision + c]);
+                add_collision_shape(robot, scene, b, &model->collisions[link->first_collision + c],
+                                    &lower, &upper);
             }
         }
-        set_body_mass(robot, b, members, member_count);
+        // Mass before joints: the physics attaches joints relative to the centre of mass.
+        set_robot_body_mass(robot, b, members, member_count);
+        if (lower.x <= upper.x) {
+            // The soil only feels a body within this box around its shapes.
+            v3 margin = {SOIL_DOMAIN_MARGIN, SOIL_DOMAIN_MARGIN, SOIL_DOMAIN_MARGIN};
+            add_soil_domain(robot->physics, body->physics_body, 0.5f * (lower + upper),
+                            upper - lower + 2.0f * margin);
+        }
     }
 
-    // Joints: every movable URDF joint gets a Robot_Joint; balls get one Box3D joint.
+    // Joints: every movable URDF joint gets a Robot_Joint; balls get one spherical joint.
     for (u32 j = 0; j < joints; j++) {
         const Urdf_Joint *urdf = &model->joints[j];
         robot->urdf_joint_index[j] = -1;
@@ -657,6 +658,7 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
         robot->urdf_joint_index[j] = (i32)index;
         Robot_Joint *joint = &robot->joints[index];
         *joint = {};
+        joint->physics_joint = -1;
         joint->urdf_joint = j;
         joint->ball = ball_of_joint[j];
         if (urdf->actuated) {
@@ -670,7 +672,7 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
             continue;
         }
         joint->default_drive = joint->drive;
-        if (!create_joint(robot, world, joint, error, error_size)) {
+        if (!create_joint(robot, joint, error, error_size)) {
             destroy_robot(robot);
             return false;
         }
@@ -678,7 +680,7 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
     for (u32 b = 0; b < robot->ball_count; b++) {
         const u32 *chain = &chains[b * 3];
         Robot_Ball *ball = &robot->balls[b];
-        create_ball(robot, world, ball, chain, rest);
+        create_ball(robot, ball, chain, rest);
         for (u32 k = 0; k < 3; k++) {
             ball->joints[k] = (u32)robot->urdf_joint_index[chain[k]];
             robot->joints[ball->joints[k]].ball_axis = k;
@@ -690,66 +692,49 @@ bool create_robot(Robot *robot, b3WorldId world, Linear_Allocator *allocator,
 
 void destroy_robot(Robot *robot)
 {
-    for (u32 b = 0; b < robot->body_count; b++) {
-        if (b3Body_IsValid(robot->bodies[b].id)) {
-            b3DestroyBody(robot->bodies[b].id); // also destroys its shapes and joints
-        }
-    }
+    // The physics has no way to take bodies out; they go with the world.
     robot->body_count = 0;
     robot->joint_count = 0;
     robot->ball_count = 0;
     robot->wheel_count = 0;
 }
 
-// Effort control: the commanded torque (or force) acts on both bodies, equal and opposite,
-// about (or along) the joint axis.
-static void apply_joint_effort(Robot *robot, Robot_Joint *joint)
-{
-    const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
-    b3BodyId body_a = robot->bodies[joint->body_a].id;
-    b3BodyId body_b = robot->bodies[joint->body_b].id;
-    b3Transform frame = b3MulTransforms(b3Body_GetTransform(body_a), joint->frame_a);
-    if (urdf->type == URDF_JOINT_PRISMATIC) {
-        v3 force = joint->command * b3RotateVector(frame.q, v3{1.0f, 0.0f, 0.0f});
-        b3Body_ApplyForce(body_b, force, frame.p, true);
-        b3Body_ApplyForce(body_a, -force, frame.p, true);
-    } else {
-        v3 torque = joint->command * b3RotateVector(frame.q, v3{0.0f, 0.0f, 1.0f});
-        b3Body_ApplyTorque(body_b, torque, true);
-        b3Body_ApplyTorque(body_a, -torque, true);
-    }
-}
-
 void apply_robot_commands(Robot *robot)
 {
     for (u32 i = 0; i < robot->joint_count; i++) {
         Robot_Joint *joint = &robot->joints[i];
-        if (joint->drive == DRIVE_NONE || B3_IS_NULL(joint->id)) {
-            continue;
-        }
-        if (joint->drive == DRIVE_EFFORT) {
-            apply_joint_effort(robot, joint);
+        if (joint->physics_joint < 0) {
             continue;
         }
         const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
-        f32 speed = joint->command;
-        if (joint->drive == DRIVE_POSITION) {
+        u32 id = (u32)joint->physics_joint;
+        f32 limit = get_motor_limit(robot, joint, joint->drive);
+        switch (joint->drive) {
+        case DRIVE_NONE:
+            // Coasting still feels the URDF's joint friction, as an undriven motor does.
+            drive_joint(robot->physics, id, limit > 0.0f ? MOTOR_SPEED : MOTOR_OFF, 0.0f, limit);
+            break;
+        case DRIVE_EFFORT:
+            drive_joint(robot->physics, id, MOTOR_EFFORT, joint->command, 0.0f);
+            break;
+        case DRIVE_VELOCITY:
+            drive_joint(robot->physics, id, MOTOR_SPEED, joint->command, limit);
+            break;
+        case DRIVE_POSITION: {
             // A servo that heads for its target, within the joint's limits, at servo_speed
             // (and arrives exactly, without overshoot).
             f32 target = joint->command;
             if (urdf->has_limits && urdf->lower < urdf->upper) {
                 target = min(max(target, urdf->lower), urdf->upper);
             }
-            speed = (target - joint->position) / robot->step_seconds;
-            f32 limit = robot->settings.servo_speed;
-            if (limit > 0.0f) {
-                speed = min(max(speed, -limit), limit);
+            f32 speed = (target - joint->position) / robot->step_seconds;
+            f32 servo = robot->settings.servo_speed;
+            if (servo > 0.0f) {
+                speed = min(max(speed, -servo), servo);
             }
+            drive_joint(robot->physics, id, MOTOR_SPEED, speed, limit);
+            break;
         }
-        if (urdf->type == URDF_JOINT_PRISMATIC) {
-            b3PrismaticJoint_SetMotorSpeed(joint->id, speed);
-        } else {
-            b3RevoluteJoint_SetMotorSpeed(joint->id, speed);
         }
     }
 }
@@ -757,36 +742,24 @@ void apply_robot_commands(Robot *robot)
 void set_joint_drive(Robot *robot, u32 joint_index, Joint_Drive drive)
 {
     Robot_Joint *joint = &robot->joints[joint_index];
-    if (joint->drive == drive || B3_IS_NULL(joint->id)) {
+    if (joint->drive == drive || joint->physics_joint < 0) {
         return;
     }
     joint->drive = drive;
-    // Coasting, or effort control, still feels the URDF's joint friction, as an undriven
-    // motor does.
-    f32 limit = get_motor_limit(robot, joint, drive);
     if (drive == DRIVE_NONE) {
         joint->command = 0.0f;
-    }
-    if (robot->model.joints[joint->urdf_joint].type == URDF_JOINT_PRISMATIC) {
-        b3PrismaticJoint_EnableMotor(joint->id, limit > 0.0f);
-        b3PrismaticJoint_SetMaxMotorForce(joint->id, limit);
-        b3PrismaticJoint_SetMotorSpeed(joint->id, 0.0f);
-    } else {
-        b3RevoluteJoint_EnableMotor(joint->id, limit > 0.0f);
-        b3RevoluteJoint_SetMaxMotorTorque(joint->id, limit);
-        b3RevoluteJoint_SetMotorSpeed(joint->id, 0.0f);
     }
 }
 
 // Angles (a, b, c) with m = Rx(a) Ry(b) Rz(c).
-static v3 get_angles_xyz(b3Matrix3 m)
+static v3 get_angles_xyz(Mat3 m)
 {
     f32 sin_b = min(max(m.cz.x, -1.0f), 1.0f);
     return v3{atan2f(-m.cz.y, m.cz.z), asinf(sin_b), atan2f(-m.cy.x, m.cx.x)};
 }
 
-// A ball joint's angle, as one of its three URDF joints. The position keeps counting
-// past a turn, and the velocity comes from the change since the last step.
+// A joint's angle from its bodies' poses. The position keeps counting past a turn, and
+// the velocity comes from the change since the last step.
 static void update_joint_angle(Robot *robot, u32 joint_index, f32 angle)
 {
     Robot_Joint *joint = &robot->joints[joint_index];
@@ -797,16 +770,42 @@ static void update_joint_angle(Robot *robot, u32 joint_index, f32 angle)
 
 static void read_ball(Robot *robot, Robot_Ball *ball)
 {
-    b3Transform body_a = robot->bodies[ball->body_a].current;
-    b3Transform body_b = robot->bodies[ball->body_b].current;
-    b3Quat frame_a = b3MulQuat(body_a.q, ball->frame_a.q);
-    b3Quat frame_b = b3MulQuat(body_b.q, ball->frame_b.q);
-    b3Matrix3 relative = b3MakeMatrixFromQuat(b3InvMulQuat(frame_a, frame_b));
-    b3Matrix3 in_basis = b3MulMM(b3MulMM(b3Transpose(ball->basis), relative), ball->basis);
+    Pose body_a = robot->bodies[ball->body_a].current;
+    Pose body_b = robot->bodies[ball->body_b].current;
+    Quat frame_a = multiply_quats(body_a.q, ball->frame_a.q);
+    Quat frame_b = multiply_quats(body_b.q, ball->frame_b.q);
+    Mat3 relative = make_matrix_from_quat(inverse_multiply_quats(frame_a, frame_b));
+    Mat3 in_basis =
+        multiply_matrices(multiply_matrices(transpose_matrix(ball->basis), relative), ball->basis);
     v3 angles = get_angles_xyz(in_basis);
     update_joint_angle(robot, ball->joints[0], angles.x);
     update_joint_angle(robot, ball->joints[1], angles.y);
     update_joint_angle(robot, ball->joints[2], ball->third_sign * angles.z);
+}
+
+// A revolute or prismatic joint's position and rate, from its bodies' poses and velocities.
+static void read_joint(Robot *robot, Robot_Joint *joint)
+{
+    const Robot_Body *body_a = &robot->bodies[joint->body_a];
+    const Robot_Body *body_b = &robot->bodies[joint->body_b];
+    Pose frame_a = multiply_poses(body_a->current, joint->frame_a);
+    Pose frame_b = multiply_poses(body_b->current, joint->frame_b);
+    const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
+    if (urdf->type == URDF_JOINT_PRISMATIC) {
+        v3 axis = rotate_vector(frame_a.q, v3{1.0f, 0.0f, 0.0f});
+        joint->position = inverse_transform_point(frame_a, frame_b.p).x;
+        v3 relative = get_point_velocity(robot->physics, body_b->physics_body, frame_b.p) -
+                      get_point_velocity(robot->physics, body_a->physics_body, frame_b.p);
+        joint->velocity = dot(relative, axis);
+        return;
+    }
+    // Keep counting past ±π, as joint states do for continuous joints.
+    f32 angle = get_twist_angle(inverse_multiply_quats(frame_a.q, frame_b.q));
+    joint->position += wrap_pi(angle - wrap_pi(joint->position));
+    v3 axis = rotate_vector(frame_a.q, v3{0.0f, 0.0f, 1.0f});
+    v3 relative = get_body_angular_velocity(robot->physics, body_b->physics_body) -
+                  get_body_angular_velocity(robot->physics, body_a->physics_body);
+    joint->velocity = dot(relative, axis);
 }
 
 void read_robot_state(Robot *robot)
@@ -814,34 +813,17 @@ void read_robot_state(Robot *robot)
     for (u32 b = 0; b < robot->body_count; b++) {
         Robot_Body *body = &robot->bodies[b];
         body->previous = body->current;
-        body->current = b3Body_GetTransform(body->id);
+        body->current = get_body_pose(robot->physics, body->physics_body);
     }
     for (u32 i = 0; i < robot->joint_count; i++) {
         Robot_Joint *joint = &robot->joints[i];
-        if (B3_IS_NULL(joint->id)) {
+        if (joint->physics_joint < 0) {
             continue;
         }
-        const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
-        if (urdf->type == URDF_JOINT_PRISMATIC) {
-            joint->position = b3PrismaticJoint_GetTranslation(joint->id);
-            joint->velocity = b3PrismaticJoint_GetSpeed(joint->id);
-            joint->effort = joint->drive == DRIVE_EFFORT
-                                ? joint->command
-                                : b3PrismaticJoint_GetMotorForce(joint->id);
-            continue;
-        }
-        // Keep counting past ±π, as joint states do for continuous joints.
-        f32 angle = b3RevoluteJoint_GetAngle(joint->id);
-        joint->position += wrap_pi(angle - wrap_pi(joint->position));
-        b3BodyId a = robot->bodies[joint->body_a].id;
-        b3BodyId b = robot->bodies[joint->body_b].id;
-        v3 axis =
-            b3RotateVector(b3MulQuat(robot->bodies[joint->body_a].current.q, joint->frame_a.q),
-                           v3{0.0f, 0.0f, 1.0f});
-        v3 relative = b3Sub(b3Body_GetAngularVelocity(b), b3Body_GetAngularVelocity(a));
-        joint->velocity = b3Dot(relative, axis);
-        joint->effort = joint->drive == DRIVE_EFFORT ? joint->command
-                                                     : b3RevoluteJoint_GetMotorTorque(joint->id);
+        read_joint(robot, joint);
+        joint->effort = joint->drive == DRIVE_EFFORT
+                            ? joint->command
+                            : get_joint_effort(robot->physics, (u32)joint->physics_joint);
     }
     for (u32 b = 0; b < robot->ball_count; b++) {
         read_ball(robot, &robot->balls[b]);
@@ -852,9 +834,9 @@ void reset_robot(Robot *robot)
 {
     for (u32 b = 0; b < robot->body_count; b++) {
         Robot_Body *body = &robot->bodies[b];
-        b3Body_SetTransform(body->id, body->start.p, body->start.q);
-        b3Body_SetLinearVelocity(body->id, v3{0.0f, 0.0f, 0.0f});
-        b3Body_SetAngularVelocity(body->id, v3{0.0f, 0.0f, 0.0f});
+        set_body_pose(robot->physics, body->physics_body, body->start);
+        set_body_velocity(robot->physics, body->physics_body, v3{0.0f, 0.0f, 0.0f},
+                          v3{0.0f, 0.0f, 0.0f});
         body->current = body->previous = body->start;
     }
     for (u32 i = 0; i < robot->joint_count; i++) {
@@ -922,21 +904,36 @@ void drive_robot(Robot *robot, f32 forward_mps, f32 turn_radps)
     }
 }
 
-b3Transform get_link_pose(const Robot *robot, u32 link, f32 alpha)
+Pose get_link_pose(const Robot *robot, u32 link, f32 alpha)
 {
     i32 body = robot->link_body[link];
     if (body < 0) {
-        return identity_transform;
+        return identity_pose;
     }
     const Robot_Body *b = &robot->bodies[body];
-    b3Transform pose;
-    pose.p = b3Lerp(b->previous.p, b->current.p, alpha);
-    pose.q = b3NLerp(b->previous.q, b->current.q, alpha);
-    return b3MulTransforms(pose, robot->link_in_body[link]);
+    Pose pose;
+    pose.p = lerp(b->previous.p, b->current.p, alpha);
+    pose.q = nlerp_quats(b->previous.q, b->current.q, alpha);
+    return multiply_poses(pose, robot->link_in_body[link]);
 }
 
 i32 find_robot_joint(const Robot *robot, const char *name)
 {
     i32 urdf = find_urdf_joint(&robot->model, name);
     return urdf >= 0 ? robot->urdf_joint_index[urdf] : -1;
+}
+
+void nudge_robot_joint(Robot *robot, u32 joint_index, f32 direction, f32 rate, f32 seconds)
+{
+    Robot_Joint *joint = &robot->joints[joint_index];
+    if (joint->default_drive != DRIVE_POSITION) {
+        return;
+    }
+    set_joint_drive(robot, joint_index, DRIVE_POSITION);
+    f32 target = joint->command + direction * rate * seconds;
+    const Urdf_Joint *urdf = &robot->model.joints[joint->urdf_joint];
+    if (urdf->has_limits && urdf->lower < urdf->upper) {
+        target = min(max(target, urdf->lower), urdf->upper);
+    }
+    joint->command = target;
 }
